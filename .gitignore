@@ -1,0 +1,6 @@
+/target
+.env
+.env.*
+fieldmind-edge.db
+*.db
+.idea/
