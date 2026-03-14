@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use powersync::{PowerSyncDatabase, StreamSubscription, SyncOptions};
 
 use crate::{
-    config::DaemonConfig, connector::FieldMindConnector, database::open_database, watcher,
+    config::DaemonConfig, connector::FieldMidConnector, database::open_database, watcher,
 };
 
 pub async fn run() -> Result<()> {
@@ -11,7 +11,7 @@ pub async fn run() -> Result<()> {
     let db = context.db;
     db.async_tasks().spawn_with_tokio();
 
-    let connector = FieldMindConnector::new(
+    let connector = FieldMidConnector::new(
         db.clone(),
         context.client,
         config.powersync_url.clone(),
@@ -24,7 +24,7 @@ pub async fn run() -> Result<()> {
     let _subscription = subscribe_stream_if_configured(&db, &config).await?;
 
     println!(
-        "fieldmind_edge_started device_id={} database_path={} write_uploads={} stream_subscription={}",
+        "fieldmid_edge_started device_id={} database_path={} write_uploads={} stream_subscription={}",
         config.base.device_id,
         config.base.database_path.display(),
         if config.backend_write.is_some() {

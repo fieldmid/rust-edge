@@ -15,7 +15,7 @@ use serde_json::{Map, Value};
 use crate::config::BackendWriteConfig;
 
 #[derive(Clone)]
-pub struct FieldMindConnector {
+pub struct FieldMidConnector {
     db: PowerSyncDatabase,
     client: Arc<dyn HttpClient>,
     endpoint: String,
@@ -24,7 +24,7 @@ pub struct FieldMindConnector {
     backend_write: Option<BackendWriteConfig>,
 }
 
-impl FieldMindConnector {
+impl FieldMidConnector {
     pub fn new(
         db: PowerSyncDatabase,
         client: Arc<dyn HttpClient>,
@@ -45,7 +45,7 @@ impl FieldMindConnector {
 }
 
 #[async_trait]
-impl BackendConnector for FieldMindConnector {
+impl BackendConnector for FieldMidConnector {
     async fn fetch_credentials(&self) -> Result<PowerSyncCredentials, PowerSyncError> {
         Ok(PowerSyncCredentials {
             endpoint: self.endpoint.clone(),
@@ -64,7 +64,7 @@ impl BackendConnector for FieldMindConnector {
     }
 }
 
-impl FieldMindConnector {
+impl FieldMidConnector {
     async fn upload_transaction(
         &self,
         transaction_id: Option<i64>,

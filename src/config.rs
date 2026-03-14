@@ -34,10 +34,10 @@ impl BaseConfig {
         dotenvy::dotenv().ok();
         Self {
             device_id: optional_env("DEVICE_ID")
-                .unwrap_or_else(|| "fieldmind-edge-001".to_string()),
-            database_path: env::var_os("FIELDMIND_DB_PATH")
+                .unwrap_or_else(|| "fieldmid-edge-001".to_string()),
+            database_path: env::var_os("FIELDMID_DB_PATH")
                 .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("fieldmind-edge.db")),
+                .unwrap_or_else(|| PathBuf::from("fieldmid-edge.db")),
         }
     }
 }

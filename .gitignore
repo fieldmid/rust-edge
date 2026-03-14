@@ -1,6 +1,6 @@
 /target
 .env
 .env.*
-fieldmind-edge.db
+fieldmid-edge.db
 *.db
 .idea/
