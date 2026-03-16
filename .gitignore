@@ -2,5 +2,5 @@
 .env
 .env.*
 fieldmid-edge.db
-*.db
+*.db*
 .idea/

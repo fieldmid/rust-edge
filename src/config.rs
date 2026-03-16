@@ -13,14 +13,7 @@ pub struct DaemonConfig {
     pub base: BaseConfig,
     pub powersync_url: String,
     pub powersync_token: String,
-    pub backend_write: Option<BackendWriteConfig>,
     pub sync_stream: Option<SyncStreamConfig>,
-}
-
-#[derive(Clone)]
-pub struct BackendWriteConfig {
-    pub url: String,
-    pub token: Option<String>,
 }
 
 #[derive(Clone)]
@@ -33,8 +26,7 @@ impl BaseConfig {
     pub fn from_env() -> Self {
         dotenvy::dotenv().ok();
         Self {
-            device_id: optional_env("DEVICE_ID")
-                .unwrap_or_else(|| "fieldmid-edge-001".to_string()),
+            device_id: optional_env("DEVICE_ID").unwrap_or_else(|| "fieldmid-edge-001".to_string()),
             database_path: env::var_os("FIELDMID_DB_PATH")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("fieldmid-edge.db")),
@@ -45,21 +37,22 @@ impl BaseConfig {
 impl DaemonConfig {
     pub fn from_env() -> Result<Self> {
         let base = BaseConfig::from_env();
-        let backend_write_url = optional_env("BACKEND_WRITE_URL");
-        let backend_write_token = optional_env("BACKEND_WRITE_TOKEN");
-        let sync_stream_name = optional_env("POWERSYNC_STREAM");
-        let sync_stream_params = optional_env("POWERSYNC_STREAM_PARAMS")
+        Self::from_env_values(base, |name| env::var(name).ok())
+    }
+
+    fn from_env_values<F>(base: BaseConfig, env_value: F) -> Result<Self>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        let sync_stream_name = optional_value("POWERSYNC_STREAM", &env_value);
+        let sync_stream_params = optional_value("POWERSYNC_STREAM_PARAMS", &env_value)
             .map(|value| parse_json_object("POWERSYNC_STREAM_PARAMS", &value))
             .transpose()?;
 
         Ok(Self {
             base,
-            powersync_url: required_env("POWERSYNC_URL")?,
-            powersync_token: required_env("POWERSYNC_TOKEN")?,
-            backend_write: backend_write_url.map(|url| BackendWriteConfig {
-                url,
-                token: backend_write_token,
-            }),
+            powersync_url: required_value("POWERSYNC_URL", &env_value)?,
+            powersync_token: required_value("POWERSYNC_TOKEN", &env_value)?,
             sync_stream: sync_stream_name.map(|name| SyncStreamConfig {
                 name,
                 params: sync_stream_params,
@@ -68,12 +61,18 @@ impl DaemonConfig {
     }
 }
 
-fn required_env(name: &str) -> Result<String> {
-    env::var(name).with_context(|| format!("{name} is not set"))
+fn required_value<F>(name: &str, env_value: &F) -> Result<String>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    optional_value(name, env_value).with_context(|| format!("{name} is not set"))
 }
 
-fn optional_env(name: &str) -> Option<String> {
-    env::var(name).ok().and_then(|value| {
+fn optional_value<F>(name: &str, env_value: &F) -> Option<String>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    env_value(name).and_then(|value| {
         let trimmed = value.trim();
         if trimmed.is_empty() {
             None
@@ -81,6 +80,10 @@ fn optional_env(name: &str) -> Option<String> {
             Some(trimmed.to_string())
         }
     })
+}
+
+fn optional_env(name: &str) -> Option<String> {
+    optional_value(name, &|key| env::var(key).ok())
 }
 
 fn parse_json_object(name: &str, value: &str) -> Result<Value> {
@@ -91,5 +94,59 @@ fn parse_json_object(name: &str, value: &str) -> Result<Value> {
         Ok(parsed)
     } else {
         anyhow::bail!("{name} must be a JSON object")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    fn test_base() -> BaseConfig {
+        BaseConfig {
+            device_id: "test-device".to_string(),
+            database_path: PathBuf::from("test.db"),
+        }
+    }
+
+    #[test]
+    fn read_only_env_values_are_enough_to_load_daemon_config() {
+        let values = HashMap::from([
+            (
+                "POWERSYNC_URL".to_string(),
+                "https://example.powersync.com".to_string(),
+            ),
+            ("POWERSYNC_TOKEN".to_string(), "dev-token".to_string()),
+        ]);
+
+        let config =
+            DaemonConfig::from_env_values(test_base(), |key| values.get(key).cloned()).unwrap();
+
+        assert_eq!(config.powersync_url, "https://example.powersync.com");
+        assert_eq!(config.powersync_token, "dev-token");
+        assert!(config.sync_stream.is_none());
+    }
+
+    #[test]
+    fn legacy_write_env_values_are_ignored() {
+        let values = HashMap::from([
+            (
+                "POWERSYNC_URL".to_string(),
+                "https://example.powersync.com".to_string(),
+            ),
+            ("POWERSYNC_TOKEN".to_string(), "dev-token".to_string()),
+            (
+                "BACKEND_WRITE_URL".to_string(),
+                "https://example.com/write".to_string(),
+            ),
+            ("BACKEND_WRITE_TOKEN".to_string(), "legacy".to_string()),
+        ]);
+
+        let config =
+            DaemonConfig::from_env_values(test_base(), |key| values.get(key).cloned()).unwrap();
+
+        assert_eq!(config.powersync_token, "dev-token");
+        assert!(config.sync_stream.is_none());
     }
 }

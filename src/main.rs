@@ -1,10 +1,11 @@
 mod app;
+mod banner;
 mod cli;
 mod config;
 mod connector;
 mod database;
-mod demo;
 mod schema;
+mod tui;
 mod watcher;
 
 #[tokio::main]
@@ -20,7 +21,8 @@ async fn main() {
 
     let result = match command {
         cli::Command::Run => app::run().await,
-        cli::Command::InsertDemoCritical => demo::insert_demo_critical().await,
+        cli::Command::CheckConnectivity => app::check_connectivity().await,
+        cli::Command::LatestIncidents => app::show_latest_incidents().await,
         cli::Command::Help => {
             cli::print_help();
             Ok(())

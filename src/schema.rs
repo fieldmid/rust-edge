@@ -2,9 +2,22 @@ use powersync::schema::{Column, Schema, Table};
 
 pub fn app_schema() -> Schema {
     Schema {
-        tables: vec![incidents_table(), sync_logs_table()],
+        tables: vec![
+            sites_table(),
+            incidents_table(),
+            escalations_table(),
+            sync_logs_table(),
+        ],
         raw_tables: Vec::new(),
     }
+}
+
+fn sites_table() -> Table {
+    Table::create(
+        "sites",
+        vec![Column::text("name"), Column::text("created_at")],
+        |_| {},
+    )
 }
 
 fn incidents_table() -> Table {
@@ -20,6 +33,18 @@ fn incidents_table() -> Table {
             Column::text("status"),
             Column::text("created_at"),
             Column::text("synced_at"),
+        ],
+        |_| {},
+    )
+}
+
+fn escalations_table() -> Table {
+    Table::create(
+        "escalations",
+        vec![
+            Column::text("incident_id"),
+            Column::integer("level"),
+            Column::text("created_at"),
         ],
         |_| {},
     )
