@@ -1,6 +1,7 @@
 /target
 .env
 .env.*
+!.env.example
 fieldmid-edge.db
 *.db*
 .idea/

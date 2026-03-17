@@ -15,7 +15,16 @@ pub fn app_schema() -> Schema {
 fn sites_table() -> Table {
     Table::create(
         "sites",
-        vec![Column::text("name"), Column::text("created_at")],
+        vec![
+            Column::text("org_id"),
+            Column::text("name"),
+            Column::text("location"),
+            Column::text("site_type"),
+            Column::text("lat"),
+            Column::text("lng"),
+            Column::integer("active"),
+            Column::text("created_at"),
+        ],
         |_| {},
     )
 }
@@ -43,8 +52,16 @@ fn escalations_table() -> Table {
         "escalations",
         vec![
             Column::text("incident_id"),
-            Column::integer("level"),
+            Column::text("supervisor_id"),
+            Column::integer("escalation_level"),
+            Column::text("message"),
+            Column::text("channel"),
+            Column::integer("acknowledged"),
+            Column::text("acknowledged_at"),
+            Column::text("auto_escalate_at"),
+            Column::text("escalated_at"),
             Column::text("created_at"),
+            Column::text("updated_at"),
         ],
         |_| {},
     )
@@ -57,7 +74,9 @@ fn sync_logs_table() -> Table {
             Column::text("worker_id"),
             Column::text("last_synced_at"),
             Column::integer("pending_uploads"),
+            Column::integer("pending_downloads"),
             Column::text("sync_status"),
+            Column::text("updated_at"),
         ],
         |table| {
             table.options.local_only = true;
