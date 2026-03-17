@@ -57,7 +57,6 @@ Environment:
   SUPABASE_URL          Supabase project URL (for auth)
   SUPABASE_ANON_KEY     Supabase anonymous key (for auth)
   POWERSYNC_URL         PowerSync instance URL
-  POWERSYNC_TOKEN       Static token (skips auth, for dev)
   DEVICE_ID             Edge device identifier
   FIELDMID_DB_PATH      Local SQLite database path"
     );
