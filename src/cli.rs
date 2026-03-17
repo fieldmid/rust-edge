@@ -4,6 +4,9 @@ use anyhow::{Result, bail};
 
 pub enum Command {
     Run,
+    Login,
+    Logout,
+    WhoAmI,
     CheckConnectivity,
     LatestIncidents,
     Help,
@@ -17,6 +20,9 @@ impl Command {
     fn parse_arg(arg: Option<&str>) -> Result<Self> {
         match arg {
             None | Some("run") | Some("--run") => Ok(Self::Run),
+            Some("login") | Some("--login") => Ok(Self::Login),
+            Some("logout") | Some("--logout") => Ok(Self::Logout),
+            Some("whoami") | Some("--whoami") | Some("who") => Ok(Self::WhoAmI),
             Some("check-connectivity") | Some("--check-connectivity") => {
                 Ok(Self::CheckConnectivity)
             }
@@ -29,27 +35,31 @@ impl Command {
 
 pub fn print_help() {
     println!(
-        "fieldmid
+        "fieldmid — FieldMid Edge Daemon
 
 Commands:
-  fieldmid
-  fieldmid --check-connectivity
-  fieldmid --latest-incidents
-  fieldmid --help
+  fieldmid                        Start the edge daemon (TUI or headless)
+  fieldmid login                  Authenticate as org admin or supervisor
+  fieldmid logout                 Clear stored session
+  fieldmid whoami                 Show current auth status and org info
+  fieldmid check-connectivity     Test PowerSync connectivity
+  fieldmid latest-incidents       Show latest critical incidents from local DB
+  fieldmid help                   Show this help
 
 Local development:
   cargo run --bin fieldmid
-  cargo run --bin fieldmid -- --check-connectivity
-  cargo run --bin fieldmid -- --latest-incidents
-  cargo run --bin fieldmid -- --help
+  cargo run --bin fieldmid -- login
+  cargo run --bin fieldmid -- whoami
+  cargo run --bin fieldmid -- check-connectivity
+  cargo run --bin fieldmid -- latest-incidents
 
 Environment:
-  POWERSYNC_URL
-  POWERSYNC_TOKEN
-  DEVICE_ID
-  FIELDMID_DB_PATH
-  POWERSYNC_STREAM
-  POWERSYNC_STREAM_PARAMS"
+  SUPABASE_URL          Supabase project URL (for auth)
+  SUPABASE_ANON_KEY     Supabase anonymous key (for auth)
+  POWERSYNC_URL         PowerSync instance URL
+  POWERSYNC_TOKEN       Static token (skips auth, for dev)
+  DEVICE_ID             Edge device identifier
+  FIELDMID_DB_PATH      Local SQLite database path"
     );
 }
 
@@ -83,6 +93,18 @@ mod tests {
         assert!(matches!(
             Command::parse_arg(Some("--help")),
             Ok(Command::Help)
+        ));
+        assert!(matches!(
+            Command::parse_arg(Some("login")),
+            Ok(Command::Login)
+        ));
+        assert!(matches!(
+            Command::parse_arg(Some("logout")),
+            Ok(Command::Logout)
+        ));
+        assert!(matches!(
+            Command::parse_arg(Some("whoami")),
+            Ok(Command::WhoAmI)
         ));
     }
 }

@@ -3,6 +3,8 @@ use std::{env, path::PathBuf};
 use anyhow::{Context, Result};
 use serde_json::Value;
 
+use crate::{auth, session};
+
 #[derive(Clone)]
 pub struct BaseConfig {
     pub device_id: String,
@@ -14,6 +16,9 @@ pub struct DaemonConfig {
     pub powersync_url: String,
     pub powersync_token: String,
     pub sync_stream: Option<SyncStreamConfig>,
+    pub role: Option<String>,
+    pub org_name: Option<String>,
+    pub email: Option<String>,
 }
 
 #[derive(Clone)]
@@ -35,8 +40,62 @@ impl BaseConfig {
 }
 
 impl DaemonConfig {
+    #[allow(dead_code)]
     pub fn from_env() -> Result<Self> {
         let base = BaseConfig::from_env();
+        Self::from_env_values(base, |name| env::var(name).ok())
+    }
+
+    /// Try env vars first; if POWERSYNC_TOKEN is missing, fall back to stored session.
+    pub async fn from_env_or_session() -> Result<Self> {
+        let base = BaseConfig::from_env();
+        let env_token = optional_value("POWERSYNC_TOKEN", &|key| env::var(key).ok());
+
+        if env_token.is_some() {
+            // Static token set — use env-only config (legacy/dev mode)
+            return Self::from_env_values(base, |name| env::var(name).ok());
+        }
+
+        // No static token — try stored session
+        if session::has_session() {
+            let sess = auth::ensure_session().await?;
+            let powersync_url = optional_value("POWERSYNC_URL", &|key| env::var(key).ok())
+                .context("POWERSYNC_URL is required")?;
+
+            // Determine sync stream based on role
+            let sync_stream = match sess.role.as_str() {
+                "admin" => Some(SyncStreamConfig {
+                    name: "admin_overview".to_string(),
+                    params: None,
+                }),
+                "supervisor" => {
+                    if let Some(site_id) = &sess.site_id {
+                        Some(SyncStreamConfig {
+                            name: "edge_critical_feed".to_string(),
+                            params: Some(serde_json::json!({ "site_id": site_id })),
+                        })
+                    } else {
+                        Some(SyncStreamConfig {
+                            name: "supervisor_site".to_string(),
+                            params: None,
+                        })
+                    }
+                }
+                _ => None,
+            };
+
+            return Ok(Self {
+                base,
+                powersync_url,
+                powersync_token: sess.access_token.clone(),
+                sync_stream,
+                role: Some(sess.role.clone()),
+                org_name: sess.org_name.clone(),
+                email: Some(sess.email.clone()),
+            });
+        }
+
+        // No session either — require env vars
         Self::from_env_values(base, |name| env::var(name).ok())
     }
 
@@ -57,6 +116,9 @@ impl DaemonConfig {
                 name,
                 params: sync_stream_params,
             }),
+            role: None,
+            org_name: None,
+            email: None,
         })
     }
 }

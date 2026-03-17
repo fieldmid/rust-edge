@@ -36,8 +36,12 @@ const MUTED: Color = Color::Rgb(148, 163, 184);
 
 pub struct TuiConfig {
     pub device_id: String,
+    #[allow(dead_code)]
     pub database_path: String,
     pub stream_subscription_enabled: bool,
+    pub role: Option<String>,
+    pub org_name: Option<String>,
+    pub email: Option<String>,
 }
 
 struct DashboardState {
@@ -322,38 +326,59 @@ fn queue_block(state: &DashboardState) -> Paragraph<'static> {
 }
 
 fn config_block(config: &TuiConfig) -> Paragraph<'static> {
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled("Device  ", Style::default().fg(MUTED)),
-            Span::styled(config.device_id.clone(), Style::default().fg(Color::White)),
-        ]),
-        Line::from(vec![
-            Span::styled("Database", Style::default().fg(MUTED)),
-            Span::raw("  "),
+    let mut lines = vec![];
+
+    if let Some(email) = &config.email {
+        lines.push(Line::from(vec![
+            Span::styled("User    ", Style::default().fg(MUTED)),
+            Span::styled(email.clone(), Style::default().fg(Color::White)),
+        ]));
+    }
+
+    if let Some(role) = &config.role {
+        let role_color = match role.as_str() {
+            "admin" => C3,
+            "supervisor" => WARNING,
+            _ => MUTED,
+        };
+        lines.push(Line::from(vec![
+            Span::styled("Role    ", Style::default().fg(MUTED)),
             Span::styled(
-                config.database_path.clone(),
-                Style::default().fg(Color::White),
+                role.clone(),
+                Style::default().fg(role_color).add_modifier(Modifier::BOLD),
             ),
-        ]),
-        Line::from(vec![
-            Span::styled("Mode    ", Style::default().fg(MUTED)),
-            Span::styled(
-                "read-only",
-                Style::default().fg(SUCCESS).add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Stream  ", Style::default().fg(MUTED)),
-            Span::styled(
-                if config.stream_subscription_enabled {
-                    "configured"
-                } else {
-                    "default auto-subscribe"
-                },
-                Style::default().fg(C1),
-            ),
-        ]),
-    ];
+        ]));
+    }
+
+    if let Some(org) = &config.org_name {
+        lines.push(Line::from(vec![
+            Span::styled("Org     ", Style::default().fg(MUTED)),
+            Span::styled(org.clone(), Style::default().fg(C1).add_modifier(Modifier::BOLD)),
+        ]));
+    }
+
+    lines.push(Line::from(vec![
+        Span::styled("Device  ", Style::default().fg(MUTED)),
+        Span::styled(config.device_id.clone(), Style::default().fg(Color::White)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("Mode    ", Style::default().fg(MUTED)),
+        Span::styled(
+            "read-only",
+            Style::default().fg(SUCCESS).add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("Stream  ", Style::default().fg(MUTED)),
+        Span::styled(
+            if config.stream_subscription_enabled {
+                "configured"
+            } else {
+                "default auto-subscribe"
+            },
+            Style::default().fg(C1),
+        ),
+    ]));
 
     lines.push(Line::from(""));
     lines.push(Line::from(vec![Span::styled(
