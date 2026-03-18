@@ -35,30 +35,31 @@ impl Command {
 
 pub fn print_help() {
     println!(
-        "fieldmid — FieldMid Edge Daemon
+        "\x1b[1mfieldmid\x1b[0m — FieldMid Edge Daemon
 
-Commands:
+\x1b[1mCommands:\x1b[0m
   fieldmid                        Start the edge daemon (TUI or headless)
-  fieldmid login                  Authenticate as org admin or supervisor
+  fieldmid login                  Authenticate via browser or email/password
   fieldmid logout                 Clear stored session
   fieldmid whoami                 Show current auth status and org info
   fieldmid check-connectivity     Test PowerSync connectivity
   fieldmid latest-incidents       Show latest critical incidents from local DB
   fieldmid help                   Show this help
 
-Local development:
+\x1b[1mLocal development:\x1b[0m
   cargo run --bin fieldmid
   cargo run --bin fieldmid -- login
   cargo run --bin fieldmid -- whoami
   cargo run --bin fieldmid -- check-connectivity
   cargo run --bin fieldmid -- latest-incidents
 
-Environment:
-  SUPABASE_URL          Supabase project URL (for auth)
-  SUPABASE_ANON_KEY     Supabase anonymous key (for auth)
-  POWERSYNC_URL         PowerSync instance URL
-  DEVICE_ID             Edge device identifier
-  FIELDMID_DB_PATH      Local SQLite database path"
+\x1b[1mEnvironment:\x1b[0m
+  SUPABASE_URL              Supabase project URL (for auth)
+  SUPABASE_ANON_KEY         Supabase anonymous key (for auth)
+  POWERSYNC_URL             PowerSync instance URL
+  DEVICE_ID                 Edge device identifier
+  FIELDMID_DB_PATH          Local SQLite database path
+  FIELDMID_DASHBOARD_URL    Core dashboard URL (for browser login)"
     );
 }
 

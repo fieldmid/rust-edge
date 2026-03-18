@@ -15,7 +15,7 @@ async fn main() {
     let command = match cli::Command::parse() {
         Ok(command) => command,
         Err(error) => {
-            eprintln!("{error:#}");
+            eprintln!("\n  \x1b[31m✗ {error:#}\x1b[0m\n");
             cli::print_help();
             std::process::exit(1);
         }
@@ -35,7 +35,14 @@ async fn main() {
     };
 
     if let Err(error) = result {
-        eprintln!("{error:#}");
+        // Error messages from auth.rs are already formatted with ANSI colors
+        let msg = format!("{error:#}");
+        if msg.contains('\x1b') {
+            // Already formatted
+            eprintln!("\n{msg}\n");
+        } else {
+            eprintln!("\n  \x1b[31m✗ {msg}\x1b[0m\n");
+        }
         std::process::exit(1);
     }
 }

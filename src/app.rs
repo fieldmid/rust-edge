@@ -69,7 +69,7 @@ pub async fn run() -> Result<()> {
 
 pub async fn login() -> Result<()> {
     banner::print_banner();
-    println!("\n  FieldMid Edge — Authentication\n");
+    println!("\n  \x1b[1mFieldMid Edge — Authentication\x1b[0m\n");
 
     dotenvy::dotenv().ok();
 
@@ -77,24 +77,52 @@ pub async fn login() -> Result<()> {
         .unwrap_or_else(|_| "https://ktohrdqtvqimvcostvcu.supabase.co".to_string());
     let anon_key = std::env::var("SUPABASE_ANON_KEY")
         .unwrap_or_else(|_| "sb_publishable_McJGO7Sh2_JR81mmbKkVZA_AydlBOHQ".to_string());
+    let core_url = std::env::var("FIELDMID_DASHBOARD_URL")
+        .unwrap_or_else(|_| "http://localhost:3000".to_string());
 
-    let email: String = dialoguer::Input::new()
-        .with_prompt("Email")
-        .interact_text()
-        .context("failed to read email")?;
+    // Determine login method
+    let use_browser = if std::io::stdin().is_terminal() {
+        let items = vec![
+            "Browser login (recommended — opens your browser)",
+            "Email & password (enter credentials in terminal)",
+        ];
+        let selection = dialoguer::Select::new()
+            .with_prompt("Choose login method")
+            .items(&items)
+            .default(0)
+            .interact()
+            .context("failed to select login method")?;
+        selection == 0
+    } else {
+        // Non-interactive: default to password flow
+        false
+    };
 
-    let password: String = dialoguer::Password::new()
-        .with_prompt("Password")
-        .interact()
-        .context("failed to read password")?;
+    let mut sess = if use_browser {
+        auth::browser_login(&supabase_url, &anon_key, &core_url).await?
+    } else {
+        let email: String = dialoguer::Input::new()
+            .with_prompt("  Email")
+            .interact_text()
+            .context("failed to read email")?;
 
-    println!("\nauthenticating...");
+        let password: String = dialoguer::Password::new()
+            .with_prompt("  Password")
+            .interact()
+            .context("failed to read password")?;
 
-    let mut sess = auth::login(&supabase_url, &anon_key, &email, &password).await?;
+        println!("\n  \x1b[2mAuthenticating...\x1b[0m");
 
-    println!("authenticated as {}", sess.email);
+        auth::login(&supabase_url, &anon_key, &email, &password).await?
+    };
+
+    println!(
+        "  \x1b[32m✓\x1b[0m Authenticated as \x1b[1m{}\x1b[0m",
+        sess.email
+    );
 
     // Fetch user profile for org/role info
+    print!("  \x1b[2mLoading profile...\x1b[0m");
     if let Ok(Some(profile)) = auth::fetch_user_profile(&sess).await {
         if let Some(role) = &profile.role {
             sess.role = role.clone();
@@ -105,24 +133,48 @@ pub async fn login() -> Result<()> {
         if let Some(name) = &profile.full_name {
             sess.full_name = Some(name.clone());
         }
+        println!(" \x1b[32m✓\x1b[0m");
+    } else {
+        println!(" \x1b[33m⚠ no profile found\x1b[0m");
+        println!();
+        println!("  \x1b[33m⚠ User profile not found.\x1b[0m");
+        println!("  Your account exists but has no profile entry.");
+        println!("  This usually means:");
+        println!("    • You signed up but haven't completed onboarding");
+        println!("    • Your organization admin hasn't approved your account yet");
+        println!();
+        println!("  \x1b[1mNext steps:\x1b[0m");
+        println!("    1. Visit the FieldMid dashboard to complete setup");
+        println!("    2. Contact your organization admin if you need access");
+        println!();
     }
 
-    // Fetch organizations the user can see
+    // Fetch organizations
     let orgs = auth::fetch_organizations(&sess).await.unwrap_or_default();
-    if !orgs.is_empty() {
-        println!("\nOrganizations:");
+    if orgs.is_empty() {
+        println!();
+        println!("  \x1b[33m⚠ No organizations found.\x1b[0m");
+        println!("  You are not a member of any organization.");
+        println!("  Ask your admin to invite you, or create one in the dashboard.");
+    } else {
+        println!();
+        println!("  \x1b[1mOrganizations:\x1b[0m");
         for (i, org) in orgs.iter().enumerate() {
-            let industry = org.industry.as_deref().unwrap_or("-");
-            println!("  {}. {} ({})", i + 1, org.name, industry);
+            let industry = org.industry.as_deref().unwrap_or("—");
+            println!("    {}. {} \x1b[2m({})\x1b[0m", i + 1, org.name, industry);
         }
 
         if orgs.len() == 1 {
             sess.org_id = Some(orgs[0].id.clone());
             sess.org_name = Some(orgs[0].name.clone());
-            println!("\nOrganization set: {}", orgs[0].name);
+            println!(
+                "\n  \x1b[32m✓\x1b[0m Organization set: \x1b[1m{}\x1b[0m",
+                orgs[0].name
+            );
         } else if orgs.len() > 1 {
+            println!();
             let selection: usize = dialoguer::Select::new()
-                .with_prompt("Select organization")
+                .with_prompt("  Select organization")
                 .items(&orgs.iter().map(|o| o.name.as_str()).collect::<Vec<_>>())
                 .default(0)
                 .interact()
@@ -145,12 +197,17 @@ pub async fn login() -> Result<()> {
     if role_options.len() > 1 {
         println!();
         let role_selection: usize = dialoguer::Select::new()
-            .with_prompt("Choose your role for this edge device")
-            .items(&role_options.iter().map(|r| match *r {
-                "admin" => "Org Admin (full overview of all incidents)",
-                "supervisor" => "Supervisor (site-specific incidents and escalations)",
-                _ => "Field Worker",
-            }).collect::<Vec<_>>())
+            .with_prompt("  Choose your role for this edge device")
+            .items(
+                &role_options
+                    .iter()
+                    .map(|r| match *r {
+                        "admin" => "Org Admin (full overview of all incidents)",
+                        "supervisor" => "Supervisor (site-specific incidents and escalations)",
+                        _ => "Field Worker",
+                    })
+                    .collect::<Vec<_>>(),
+            )
             .default(0)
             .interact()
             .context("failed to select role")?;
@@ -161,15 +218,21 @@ pub async fn login() -> Result<()> {
     // If supervisor, fetch and select site
     if sess.role == "supervisor" {
         let sites = auth::fetch_sites(&sess).await.unwrap_or_default();
-        if !sites.is_empty() {
-            println!("\nAvailable sites:");
+        if sites.is_empty() {
+            println!();
+            println!("  \x1b[33m⚠ No sites found.\x1b[0m");
+            println!("  No active sites are available for monitoring.");
+            println!("  Ask your organization admin to create and assign sites.");
+        } else {
+            println!();
+            println!("  \x1b[1mAvailable sites:\x1b[0m");
             for (i, site) in sites.iter().enumerate() {
-                let loc = site.location.as_deref().unwrap_or("-");
-                println!("  {}. {} ({})", i + 1, site.name, loc);
+                let loc = site.location.as_deref().unwrap_or("—");
+                println!("    {}. {} \x1b[2m({})\x1b[0m", i + 1, site.name, loc);
             }
 
             let site_selection: usize = dialoguer::Select::new()
-                .with_prompt("Select site to monitor")
+                .with_prompt("  Select site to monitor")
                 .items(&sites.iter().map(|s| s.name.as_str()).collect::<Vec<_>>())
                 .default(0)
                 .interact()
@@ -182,52 +245,117 @@ pub async fn login() -> Result<()> {
 
     session::save_session(&sess)?;
 
-    println!("\nSession saved. Summary:");
-    println!("  User:  {} ({})", sess.full_name.as_deref().unwrap_or(&sess.email), sess.email);
-    println!("  Role:  {}", sess.role);
+    // Summary
+    println!();
+    println!("  \x1b[32m✓ Login successful!\x1b[0m");
+    println!();
+    println!("  ┌─────────────────────────────────────────┐");
+    println!(
+        "  │  \x1b[1mUser:\x1b[0m   {} ({})",
+        sess.full_name.as_deref().unwrap_or("—"),
+        sess.email
+    );
+    println!("  │  \x1b[1mRole:\x1b[0m   {}", format_role(&sess.role));
     if let Some(org) = &sess.org_name {
-        println!("  Org:   {}", org);
+        println!("  │  \x1b[1mOrg:\x1b[0m    {}", org);
     }
     if let Some(site) = &sess.site_name {
-        println!("  Site:  {}", site);
+        println!("  │  \x1b[1mSite:\x1b[0m   {}", site);
     }
-    println!("\nRun `fieldmid` to start the edge daemon.");
+    println!("  └─────────────────────────────────────────┘");
+    println!();
+    println!(
+        "  You are now logged in. \x1b[2mHappy monitoring!\x1b[0m"
+    );
+    println!();
+    println!(
+        "  Run \x1b[1mfieldmid\x1b[0m to start the edge daemon."
+    );
+    println!();
 
     Ok(())
 }
 
 pub fn logout() -> Result<()> {
+    if !session::has_session() {
+        println!();
+        println!("  \x1b[2mNo active session. Already logged out.\x1b[0m");
+        println!();
+        return Ok(());
+    }
+
+    // Show who we're logging out
+    if let Ok(sess) = session::load_session() {
+        println!();
+        println!(
+            "  Logging out \x1b[1m{}\x1b[0m...",
+            sess.email
+        );
+    }
+
     session::clear_session()?;
-    println!("session cleared");
+    println!("  \x1b[32m✓\x1b[0m Session cleared.");
+    println!();
     Ok(())
 }
 
 pub async fn whoami() -> Result<()> {
+    println!();
     if !session::has_session() {
-        println!("not logged in — run `fieldmid login`");
+        println!("  \x1b[31m✗ Not logged in.\x1b[0m");
+        println!();
+        println!("  Run \x1b[1mfieldmid login\x1b[0m to authenticate.");
+        println!();
         return Ok(());
     }
 
     let sess = auth::ensure_session().await?;
 
-    println!("FieldMid Edge — Current Session");
-    println!("  User:   {} ({})", sess.full_name.as_deref().unwrap_or("-"), sess.email);
-    println!("  Role:   {}", sess.role);
-    println!("  UserID: {}", sess.user_id);
+    println!("  \x1b[1mFieldMid Edge — Current Session\x1b[0m");
+    println!();
+    println!(
+        "  User:   \x1b[1m{}\x1b[0m ({})",
+        sess.full_name.as_deref().unwrap_or("—"),
+        sess.email
+    );
+    println!("  Role:   {}", format_role(&sess.role));
+    println!("  UserID: \x1b[2m{}\x1b[0m", sess.user_id);
     if let Some(org) = &sess.org_name {
-        println!("  Org:    {} ({})", org, sess.org_id.as_deref().unwrap_or("-"));
+        println!(
+            "  Org:    {} \x1b[2m({})\x1b[0m",
+            org,
+            sess.org_id.as_deref().unwrap_or("—")
+        );
     }
     if let Some(site) = &sess.site_name {
-        println!("  Site:   {} ({})", site, sess.site_id.as_deref().unwrap_or("-"));
+        println!(
+            "  Site:   {} \x1b[2m({})\x1b[0m",
+            site,
+            sess.site_id.as_deref().unwrap_or("—")
+        );
     }
 
     let now = chrono::Utc::now().timestamp();
     let remaining = sess.expires_at - now;
     if remaining > 0 {
-        println!("  Token:  valid ({}m remaining)", remaining / 60);
+        let mins = remaining / 60;
+        if mins > 30 {
+            println!(
+                "  Token:  \x1b[32m● valid\x1b[0m ({}m remaining)",
+                mins
+            );
+        } else {
+            println!(
+                "  Token:  \x1b[33m● expiring soon\x1b[0m ({}m remaining)",
+                mins
+            );
+        }
     } else {
-        println!("  Token:  expired (will auto-refresh on next run)");
+        println!(
+            "  Token:  \x1b[31m● expired\x1b[0m (will auto-refresh on next run)"
+        );
     }
+    println!();
 
     Ok(())
 }
@@ -244,27 +372,43 @@ pub async fn check_connectivity() -> Result<()> {
     db.connect(SyncOptions::new(connector)).await;
     let _subscription = subscribe_stream_if_configured(&db, &config).await?;
 
+    println!();
+    println!("  \x1b[1mFieldMid Edge — Connectivity Check\x1b[0m");
+    println!();
+
     let status = watcher::wait_for_first_sync_status(db.clone(), Duration::from_secs(10)).await?;
     let queue_depth = watcher::read_local_write_queue_depth(&db).await?;
     let incidents = watcher::fetch_critical_incidents(&db, 5).await?;
 
-    println!("connectivity_status={status}");
-    println!("local_write_queue_depth={queue_depth}");
+    let status_icon = if status == "connected" {
+        "\x1b[32m●\x1b[0m"
+    } else {
+        "\x1b[31m●\x1b[0m"
+    };
+
+    println!("  Sync Status:    {} {}", status_icon, status);
+    println!("  Write Queue:    {} pending", queue_depth);
     if let Some(role) = &config.role {
-        println!("role={role}");
+        println!("  Role:           {}", format_role(role));
     }
     if let Some(org) = &config.org_name {
-        println!("org={org}");
+        println!("  Organization:   {}", org);
     }
-    println!("critical_incidents_snapshot={}", incidents.len());
-    for incident in incidents {
-        let created_at = incident.created_at.as_deref().unwrap_or("-");
-        println!(
-            "{} | {} | {} | {}",
-            created_at, incident.status, incident.id, incident.title
-        );
+    println!("  Incidents:      {} critical", incidents.len());
+
+    if !incidents.is_empty() {
+        println!();
+        println!("  \x1b[1mRecent Critical Incidents:\x1b[0m");
+        for incident in incidents {
+            let created_at = incident.created_at.as_deref().unwrap_or("—");
+            println!(
+                "    \x1b[2m{}\x1b[0m {} \x1b[2m({})\x1b[0m",
+                created_at, incident.title, incident.status
+            );
+        }
     }
 
+    println!();
     db.disconnect().await;
     Ok(())
 }
@@ -274,23 +418,50 @@ pub async fn show_latest_incidents() -> Result<()> {
     let context = open_database(&base.database_path)?;
     let incidents = watcher::fetch_critical_incidents(&context.db, 20).await?;
 
+    println!();
     println!(
-        "critical_incidents_snapshot={} database_path={}",
-        incidents.len(),
+        "  \x1b[1mFieldMid Edge — Critical Incidents\x1b[0m \x1b[2m({})\x1b[0m",
         base.database_path.display()
     );
-    for incident in incidents {
-        let created_at = incident.created_at.as_deref().unwrap_or("-");
+    println!();
+
+    if incidents.is_empty() {
+        println!("  \x1b[32m✓\x1b[0m No critical incidents found.");
+    } else {
         println!(
-            "{} | {} | {} | {}",
-            created_at, incident.status, incident.id, incident.title
+            "  Found \x1b[1m{}\x1b[0m critical incident(s):",
+            incidents.len()
         );
+        println!();
+        for incident in incidents {
+            let created_at = incident.created_at.as_deref().unwrap_or("—");
+            let status_color = match incident.status.as_str() {
+                "open" => "\x1b[31m",
+                "in_progress" => "\x1b[33m",
+                "resolved" => "\x1b[32m",
+                _ => "\x1b[2m",
+            };
+            println!(
+                "    \x1b[2m{}\x1b[0m  {}{}\x1b[0m  {}",
+                created_at, status_color, incident.status, incident.title
+            );
+        }
     }
+    println!();
     Ok(())
 }
 
 fn should_use_tui() -> bool {
     std::io::stdout().is_terminal() && std::io::stdin().is_terminal()
+}
+
+fn format_role(role: &str) -> String {
+    match role {
+        "admin" => "\x1b[35madmin\x1b[0m".to_string(),
+        "supervisor" => "\x1b[36msupervisor\x1b[0m".to_string(),
+        "field_worker" => "\x1b[34mfield_worker\x1b[0m".to_string(),
+        other => other.to_string(),
+    }
 }
 
 async fn subscribe_stream_if_configured(
@@ -307,6 +478,9 @@ async fn subscribe_stream_if_configured(
         .await
         .with_context(|| format!("failed to subscribe to sync stream {}", stream.name))?;
 
-    println!("sync_stream_subscribed name={}", stream.name);
+    println!(
+        "  \x1b[32m✓\x1b[0m Sync stream subscribed: {}",
+        stream.name
+    );
     Ok(Some(subscription))
 }
