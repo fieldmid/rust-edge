@@ -7,8 +7,10 @@ pub enum Command {
     Login,
     Logout,
     WhoAmI,
+    Doctor,
     CheckConnectivity,
     LatestIncidents,
+    InstallHint,
     Help,
 }
 
@@ -23,10 +25,14 @@ impl Command {
             Some("login") | Some("--login") => Ok(Self::Login),
             Some("logout") | Some("--logout") => Ok(Self::Logout),
             Some("whoami") | Some("--whoami") | Some("who") => Ok(Self::WhoAmI),
+            Some("doctor") | Some("--doctor") => Ok(Self::Doctor),
             Some("check-connectivity") | Some("--check-connectivity") => {
                 Ok(Self::CheckConnectivity)
             }
             Some("latest-incidents") | Some("--latest-incidents") => Ok(Self::LatestIncidents),
+            Some("install-hint") | Some("--install-hint") | Some("install") => {
+                Ok(Self::InstallHint)
+            }
             Some("--help") | Some("-h") | Some("help") => Ok(Self::Help),
             Some(other) => bail!("unknown command: {other}"),
         }
@@ -42,16 +48,20 @@ pub fn print_help() {
   fieldmid login                  Authenticate via browser or email/password
   fieldmid logout                 Clear stored session
   fieldmid whoami                 Show current auth status and org info
+    fieldmid doctor                 Diagnose env, session, DB, DNS, and connectivity
   fieldmid check-connectivity     Test PowerSync connectivity
   fieldmid latest-incidents       Show latest critical incidents from local DB
+    fieldmid install-hint           Print planned curl installer command
   fieldmid help                   Show this help
 
 \x1b[1mLocal development:\x1b[0m
   cargo run --bin fieldmid
   cargo run --bin fieldmid -- login
   cargo run --bin fieldmid -- whoami
+    cargo run --bin fieldmid -- doctor
   cargo run --bin fieldmid -- check-connectivity
   cargo run --bin fieldmid -- latest-incidents
+    cargo run --bin fieldmid -- install-hint
 
 \x1b[1mEnvironment:\x1b[0m
   SUPABASE_URL              Supabase project URL (for auth)
@@ -89,6 +99,18 @@ mod tests {
         assert!(matches!(
             Command::parse_arg(Some("--latest-incidents")),
             Ok(Command::LatestIncidents)
+        ));
+        assert!(matches!(
+            Command::parse_arg(Some("install-hint")),
+            Ok(Command::InstallHint)
+        ));
+        assert!(matches!(
+            Command::parse_arg(Some("install")),
+            Ok(Command::InstallHint)
+        ));
+        assert!(matches!(
+            Command::parse_arg(Some("doctor")),
+            Ok(Command::Doctor)
         ));
         assert!(matches!(
             Command::parse_arg(Some("--help")),

@@ -1,7 +1,8 @@
-use std::{io::IsTerminal, time::Duration};
+use std::{io::IsTerminal, net::ToSocketAddrs, time::Duration};
 
 use anyhow::{Context, Result};
 use powersync::{PowerSyncDatabase, StreamSubscription, SyncOptions};
+use reqwest::Url;
 
 use crate::{
     auth, banner,
@@ -31,6 +32,10 @@ pub async fn run() -> Result<()> {
             tui::TuiConfig {
                 device_id: config.base.device_id.clone(),
                 database_path: config.base.database_path.display().to_string(),
+                host_name: current_host_name(),
+                hardware_model: current_device_model(),
+                os: std::env::consts::OS.to_string(),
+                arch: std::env::consts::ARCH.to_string(),
                 stream_subscription_enabled: config.sync_stream.is_some(),
                 role: config.role.clone(),
                 org_name: config.org_name.clone(),
@@ -52,6 +57,12 @@ pub async fn run() -> Result<()> {
             config.role.as_deref().map(|r| format!(" role={r}")).unwrap_or_default(),
             config.org_name.as_deref().map(|o| format!(" org={o}")).unwrap_or_default(),
         );
+        println!(
+            "device_runtime host={} os={} arch={}",
+            current_host_name(),
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+        );
 
         tokio::select! {
             result = watcher::watch_sync_status(db.clone()) => result?,
@@ -65,6 +76,22 @@ pub async fn run() -> Result<()> {
 
     db.disconnect().await;
     Ok(())
+}
+
+fn current_host_name() -> String {
+    hostname::get()
+        .ok()
+        .and_then(|h| h.into_string().ok())
+        .filter(|h| !h.trim().is_empty())
+        .unwrap_or_else(|| "unknown-host".to_string())
+}
+
+fn current_device_model() -> Option<String> {
+    std::fs::read_to_string("/sys/class/dmi/id/product_name")
+        .ok()
+        .or_else(|| std::fs::read_to_string("/sys/devices/virtual/dmi/id/product_name").ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 pub async fn login() -> Result<()> {
@@ -185,35 +212,14 @@ pub async fn login() -> Result<()> {
         }
     }
 
-    // Role selection for edge daemon
-    let role_options = if sess.role == "admin" {
-        vec!["admin", "supervisor"]
-    } else if sess.role == "supervisor" {
-        vec!["supervisor"]
-    } else {
-        vec!["field_worker"]
+    // Device role follows account role directly.
+    // Admin accounts remain admin on the edge device.
+    let allowed_role = match sess.role.as_str() {
+        "admin" => "admin",
+        "supervisor" => "supervisor",
+        _ => "field_worker",
     };
-
-    if role_options.len() > 1 {
-        println!();
-        let role_selection: usize = dialoguer::Select::new()
-            .with_prompt("  Choose your role for this edge device")
-            .items(
-                &role_options
-                    .iter()
-                    .map(|r| match *r {
-                        "admin" => "Org Admin (full overview of all incidents)",
-                        "supervisor" => "Supervisor (site-specific incidents and escalations)",
-                        _ => "Field Worker",
-                    })
-                    .collect::<Vec<_>>(),
-            )
-            .default(0)
-            .interact()
-            .context("failed to select role")?;
-
-        sess.role = role_options[role_selection].to_string();
-    }
+    sess.role = allowed_role.to_string();
 
     // If supervisor, fetch and select site
     if sess.role == "supervisor" {
@@ -296,6 +302,21 @@ pub fn logout() -> Result<()> {
     session::clear_session()?;
     println!("  \x1b[32m✓\x1b[0m Session cleared.");
     println!();
+    Ok(())
+}
+
+pub fn print_install_hint() -> Result<()> {
+    let script_url = std::env::var("FIELDMID_INSTALL_SCRIPT_URL")
+        .unwrap_or_else(|_| "https://downloads.fieldmid.dev/install.sh".to_string());
+
+    println!();
+    println!("  \x1b[1mFieldMid CLI install (planned)\x1b[0m");
+    println!();
+    println!("  curl -fsSL {} | sh", script_url);
+    println!();
+    println!("  Tip: set FIELDMID_INSTALL_SCRIPT_URL to test a staging installer URL.");
+    println!();
+
     Ok(())
 }
 
@@ -413,6 +434,126 @@ pub async fn check_connectivity() -> Result<()> {
     Ok(())
 }
 
+pub async fn doctor() -> Result<()> {
+    dotenvy::dotenv().ok();
+
+    println!();
+    println!("  \x1b[1mFieldMid Edge — Doctor\x1b[0m");
+    println!();
+
+    let base = BaseConfig::from_env();
+    let host = current_host_name();
+    let model = current_device_model().unwrap_or_else(|| "unknown".to_string());
+
+    println!("  \x1b[1mRuntime:\x1b[0m");
+    println!("    Host:      {}", host);
+    println!("    Model:     {}", model);
+    println!("    Device ID: {}", base.device_id);
+    println!("    OS/Arch:   {}/{}", std::env::consts::OS, std::env::consts::ARCH);
+    println!("    DB Path:   {}", base.database_path.display());
+
+    let db_exists = std::path::Path::new(&base.database_path).exists();
+    println!(
+        "    DB File:   {}",
+        if db_exists { "present" } else { "missing (will be created on run)" }
+    );
+
+    println!();
+    println!("  \x1b[1mEnvironment:\x1b[0m");
+    let powersync_url = std::env::var("POWERSYNC_URL").unwrap_or_default();
+    let dashboard_url = std::env::var("FIELDMID_DASHBOARD_URL").unwrap_or_default();
+    println!("    POWERSYNC_URL:        {}", mask_env_value(&powersync_url));
+    println!(
+        "    SUPABASE_URL:         {}",
+        mask_env_value(&std::env::var("SUPABASE_URL").unwrap_or_default())
+    );
+    println!(
+        "    SUPABASE_ANON_KEY:    {}",
+        if std::env::var("SUPABASE_ANON_KEY").ok().filter(|v| !v.is_empty()).is_some() {
+            "set"
+        } else {
+            "missing"
+        }
+    );
+    println!(
+        "    FIELDMID_DASHBOARD_URL: {}",
+        mask_env_value(&dashboard_url)
+    );
+
+    println!();
+    println!("  \x1b[1mSession:\x1b[0m");
+    if session::has_session() {
+        match auth::ensure_session().await {
+            Ok(sess) => {
+                let remaining = sess.expires_at - chrono::Utc::now().timestamp();
+                println!("    Status:    valid");
+                println!("    User:      {}", sess.email);
+                println!("    Role:      {}", sess.role);
+                println!("    Expires:   {}s remaining", remaining.max(0));
+            }
+            Err(error) => {
+                println!("    Status:    invalid ({})", error);
+                println!("    Fix:       run cargo run -- logout && cargo run -- login");
+            }
+        }
+    } else {
+        println!("    Status:    missing (run cargo run -- login)");
+    }
+
+    println!();
+    println!("  \x1b[1mPowerSync Connectivity:\x1b[0m");
+    if powersync_url.is_empty() {
+        println!("    DNS:       skipped (POWERSYNC_URL missing)");
+        println!("    HTTP:      skipped (POWERSYNC_URL missing)");
+    } else if let Ok(url) = Url::parse(&powersync_url) {
+        let host = url.host_str().unwrap_or_default();
+        let port = url.port_or_known_default().unwrap_or(443);
+        let lookup = format!("{}:{}", host, port);
+
+        match lookup.to_socket_addrs() {
+            Ok(mut addrs) => {
+                if let Some(addr) = addrs.next() {
+                    println!("    DNS:       ok ({})", addr.ip());
+                } else {
+                    println!("    DNS:       no addresses returned");
+                }
+            }
+            Err(error) => println!("    DNS:       failed ({})", error),
+        }
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(8))
+            .build()
+            .context("failed to construct HTTP client")?;
+
+        match client.get(url.clone()).send().await {
+            Ok(response) => println!("    HTTP:      ok (status {})", response.status()),
+            Err(error) => println!("    HTTP:      failed ({})", error),
+        }
+    } else {
+        println!("    DNS:       skipped (invalid POWERSYNC_URL)");
+        println!("    HTTP:      skipped (invalid POWERSYNC_URL)");
+    }
+
+    if db_exists {
+        if let Ok(context) = open_database(&base.database_path) {
+            if let Ok(incidents) = watcher::fetch_critical_incidents(&context.db, 3).await {
+                println!();
+                println!("  \x1b[1mLocal Critical Snapshot:\x1b[0m {} row(s)", incidents.len());
+                for incident in incidents {
+                    println!("    - {} [{}]", incident.title, incident.status);
+                }
+            }
+        }
+    }
+
+    println!();
+    println!("  Doctor complete.");
+    println!();
+
+    Ok(())
+}
+
 pub async fn show_latest_incidents() -> Result<()> {
     let base = BaseConfig::from_env();
     let context = open_database(&base.database_path)?;
@@ -453,6 +594,20 @@ pub async fn show_latest_incidents() -> Result<()> {
 
 fn should_use_tui() -> bool {
     std::io::stdout().is_terminal() && std::io::stdin().is_terminal()
+}
+
+fn mask_env_value(value: &str) -> String {
+    if value.trim().is_empty() {
+        return "missing".to_string();
+    }
+
+    if value.len() <= 16 {
+        return "set".to_string();
+    }
+
+    let start = &value[..8];
+    let end = &value[value.len() - 8..];
+    format!("{}...{}", start, end)
 }
 
 fn format_role(role: &str) -> String {

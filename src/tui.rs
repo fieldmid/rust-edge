@@ -22,7 +22,10 @@ use ratatui::{
 };
 use rusqlite::params;
 
-use crate::watcher::{self, IncidentSummary};
+use crate::{
+    network::{self, WifiTelemetry},
+    watcher::{self, IncidentSummary},
+};
 
 const C1: Color = Color::Rgb(142, 197, 255);
 const C2: Color = Color::Rgb(43, 127, 255);
@@ -36,8 +39,11 @@ const MUTED: Color = Color::Rgb(148, 163, 184);
 
 pub struct TuiConfig {
     pub device_id: String,
-    #[allow(dead_code)]
     pub database_path: String,
+    pub host_name: String,
+    pub hardware_model: Option<String>,
+    pub os: String,
+    pub arch: String,
     pub stream_subscription_enabled: bool,
     pub role: Option<String>,
     pub org_name: Option<String>,
@@ -47,6 +53,7 @@ pub struct TuiConfig {
 struct DashboardState {
     sync_state: String,
     incidents: Vec<IncidentSummary>,
+    wifi: Option<WifiTelemetry>,
     last_error: Option<String>,
     started_at: Instant,
     last_update_at: Option<Instant>,
@@ -57,6 +64,7 @@ impl DashboardState {
         Self {
             sync_state: "sync_state=idle".to_string(),
             incidents: Vec::new(),
+            wifi: network::read_wifi_telemetry(),
             last_error: None,
             started_at: Instant::now(),
             last_update_at: None,
@@ -128,6 +136,7 @@ pub async fn run(db: PowerSyncDatabase, config: TuiConfig) -> Result<()> {
                     }
                 }
                 _ = queue_tick.tick() => {
+                    state.wifi = network::read_wifi_telemetry();
                     if let Ok(depth) = watcher::read_local_write_queue_depth(&db).await {
                         if depth > 0 {
                             break Err(anyhow::anyhow!(watcher::local_write_guard_message(depth)));
@@ -272,14 +281,39 @@ fn header() -> Paragraph<'static> {
 }
 
 fn sync_block(state: &DashboardState) -> Paragraph<'static> {
-    let sync_style = sync_state_style(&state.sync_state);
+    let sync_label = compact_sync_state(&state.sync_state);
+    let sync_style = sync_state_style(sync_label);
+    let signal_level = state
+        .wifi
+        .as_ref()
+        .map(|wifi| connectivity_level_from_percent(wifi.quality_percent))
+        .unwrap_or_else(|| connectivity_level(&state.sync_state));
+    let bars = signal_bars(signal_level);
+    let signal_color = connectivity_style(signal_level);
+    let link_text = if let Some(wifi) = &state.wifi {
+        match wifi.signal_dbm {
+            Some(dbm) => format!("{} {}% ({} dBm)", wifi.interface, wifi.quality_percent, dbm),
+            None => format!("{} {}%", wifi.interface, wifi.quality_percent),
+        }
+    } else {
+        "no wifi telemetry".to_string()
+    };
+
     let body = vec![
         Line::from(vec![
             Span::styled("State  ", Style::default().fg(MUTED)),
             Span::styled(
-                state.sync_state.replace("sync_state=", ""),
+                sync_label.to_string(),
                 sync_style.add_modifier(Modifier::BOLD),
             ),
+        ]),
+        Line::from(vec![
+            Span::styled("Link   ", Style::default().fg(MUTED)),
+            Span::styled(bars, signal_color.add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(vec![
+            Span::styled("Radio  ", Style::default().fg(MUTED)),
+            Span::styled(link_text, Style::default().fg(C1)),
         ]),
         Line::from(vec![
             Span::styled("Errors ", Style::default().fg(MUTED)),
@@ -360,6 +394,28 @@ fn config_block(config: &TuiConfig) -> Paragraph<'static> {
     lines.push(Line::from(vec![
         Span::styled("Device  ", Style::default().fg(MUTED)),
         Span::styled(config.device_id.clone(), Style::default().fg(Color::White)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("Host    ", Style::default().fg(MUTED)),
+        Span::styled(
+            if let Some(model) = &config.hardware_model {
+                format!("{} ({model})", config.host_name)
+            } else {
+                config.host_name.clone()
+            },
+            Style::default().fg(Color::White),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("System  ", Style::default().fg(MUTED)),
+        Span::styled(
+            format!("{} / {}", config.os, config.arch),
+            Style::default().fg(C1),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("DB      ", Style::default().fg(MUTED)),
+        Span::styled(shorten_middle(&config.database_path, 34), Style::default().fg(C5)),
     ]));
     lines.push(Line::from(vec![
         Span::styled("Mode    ", Style::default().fg(MUTED)),
@@ -509,6 +565,77 @@ fn sync_state_style(value: &str) -> Style {
     Style::default().fg(MUTED)
 }
 
+fn compact_sync_state(value: &str) -> &str {
+    if value.contains("download_error") {
+        "download_error"
+    } else if value.contains("upload_error") {
+        "upload_error"
+    } else if value.contains("uploading") {
+        "uploading"
+    } else if value.contains("downloading") {
+        "downloading"
+    } else if value.contains("connected") {
+        "connected"
+    } else if value.contains("connecting") {
+        "connecting"
+    } else {
+        "idle"
+    }
+}
+
+fn connectivity_level(value: &str) -> u8 {
+    if value.contains("download_error") || value.contains("upload_error") {
+        return 0;
+    }
+
+    if value.contains("connecting") {
+        return 1;
+    }
+
+    if value.contains("uploading") || value.contains("downloading") {
+        return 3;
+    }
+
+    if value.contains("connected") {
+        return 4;
+    }
+
+    2
+}
+
+fn connectivity_level_from_percent(percent: u8) -> u8 {
+    match percent {
+        0..=10 => 0,
+        11..=35 => 1,
+        36..=60 => 2,
+        61..=80 => 3,
+        _ => 4,
+    }
+}
+
+fn signal_bars(level: u8) -> String {
+    let mut bars = String::with_capacity(7);
+    for idx in 0..4 {
+        if idx < level {
+            bars.push('▮');
+        } else {
+            bars.push('▯');
+        }
+        if idx < 3 {
+            bars.push(' ');
+        }
+    }
+    bars
+}
+
+fn connectivity_style(level: u8) -> Style {
+    match level {
+        0 => Style::default().fg(ERROR),
+        1 | 2 => Style::default().fg(WARNING),
+        _ => Style::default().fg(SUCCESS),
+    }
+}
+
 fn span(color: Color, text: &'static str) -> Span<'static> {
     Span::styled(
         text,
@@ -533,4 +660,23 @@ fn format_duration(duration: Duration) -> String {
     } else {
         format!("{seconds}s")
     }
+}
+
+fn shorten_middle(value: &str, max_len: usize) -> String {
+    if value.chars().count() <= max_len {
+        return value.to_string();
+    }
+
+    let keep = max_len.saturating_sub(3) / 2;
+    let start: String = value.chars().take(keep).collect();
+    let end: String = value
+        .chars()
+        .rev()
+        .take(keep)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+
+    format!("{start}...{end}")
 }

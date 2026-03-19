@@ -26,4 +26,25 @@ Optional:
 cargo run -- run
 cargo run -- check-connectivity
 cargo run -- latest-incidents
+cargo run -- install-hint
+```
+
+## Planned curl install flow
+
+Use the helper command to print the installer command that users will run:
+
+```bash
+cargo run -- install-hint
+```
+
+Default output:
+
+```bash
+curl -fsSL https://downloads.fieldmid.dev/install.sh | sh
+```
+
+You can override the installer URL for staging/tests:
+
+```bash
+FIELDMID_INSTALL_SCRIPT_URL=https://staging-downloads.fieldmid.dev/install.sh cargo run -- install-hint
 ```

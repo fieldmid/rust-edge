@@ -5,6 +5,7 @@ mod cli;
 mod config;
 mod connector;
 mod database;
+mod network;
 mod schema;
 mod session;
 mod tui;
@@ -26,8 +27,10 @@ async fn main() {
         cli::Command::Login => app::login().await,
         cli::Command::Logout => app::logout(),
         cli::Command::WhoAmI => app::whoami().await,
+        cli::Command::Doctor => app::doctor().await,
         cli::Command::CheckConnectivity => app::check_connectivity().await,
         cli::Command::LatestIncidents => app::show_latest_incidents().await,
+        cli::Command::InstallHint => app::print_install_hint(),
         cli::Command::Help => {
             cli::print_help();
             Ok(())

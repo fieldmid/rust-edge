@@ -205,7 +205,7 @@ pub async fn browser_login(
     );
     println!();
     println!(
-        "  \x1b[2mMake sure this code matches what you see in your browser.\x1b[0m"
+        "  \x1b[2mPaste this code into the browser page to authorize this device.\x1b[0m"
     );
     println!();
 
@@ -304,8 +304,9 @@ pub async fn browser_login(
         .as_ref()
         .and_then(|m| m.get("role"))
         .and_then(|v| v.as_str())
-        .unwrap_or("field_worker")
-        .to_string();
+        .map(|s| s.to_string())
+        .or_else(|| decode_jwt_role(&access_token))
+        .unwrap_or_else(|| "field_worker".to_string());
 
     let full_name = consumed
         .user_metadata
@@ -397,8 +398,9 @@ pub async fn login(
         .as_ref()
         .and_then(|m| m.get("role"))
         .and_then(|v| v.as_str())
-        .unwrap_or("field_worker")
-        .to_string();
+        .map(|s| s.to_string())
+        .or_else(|| decode_jwt_role(&auth.access_token))
+        .unwrap_or_else(|| "field_worker".to_string());
 
     let full_name = auth
         .user
@@ -674,5 +676,11 @@ pub fn decode_jwt_role(token: &str) -> Option<String> {
         .get("user_metadata")
         .and_then(|m| m.get("role"))
         .and_then(|v| v.as_str())
+        .or_else(|| {
+            claims
+                .get("app_metadata")
+                .and_then(|m| m.get("role"))
+                .and_then(|v| v.as_str())
+        })
         .map(|s| s.to_string())
 }
