@@ -60,19 +60,10 @@ impl DaemonConfig {
                 name: "admin_overview".to_string(),
                 params: None,
             }),
-            "supervisor" => {
-                if let Some(site_id) = &sess.site_id {
-                    Some(SyncStreamConfig {
-                        name: "edge_critical_feed".to_string(),
-                        params: Some(serde_json::json!({ "site_id": site_id })),
-                    })
-                } else {
-                    Some(SyncStreamConfig {
-                        name: "supervisor_site".to_string(),
-                        params: None,
-                    })
-                }
-            }
+            "supervisor" => Some(SyncStreamConfig {
+                name: "supervisor_site".to_string(),
+                params: None,
+            }),
             _ => None,
         };
 

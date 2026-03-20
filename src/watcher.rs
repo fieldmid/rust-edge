@@ -11,6 +11,7 @@ const DEFAULT_INCIDENT_LIMIT: i64 = 20;
 pub struct IncidentSummary {
     pub id: String,
     pub title: String,
+    pub severity: String,
     pub status: String,
     pub created_at: Option<String>,
 }
@@ -33,10 +34,10 @@ pub async fn watch_sync_status(db: PowerSyncDatabase) -> Result<()> {
     Ok(())
 }
 
-pub async fn watch_critical_incidents(db: PowerSyncDatabase) -> Result<()> {
+pub async fn watch_live_incidents(db: PowerSyncDatabase) -> Result<()> {
     let stream = db.watch_statement(
         format!(
-            "SELECT id, title, status, created_at FROM incidents WHERE severity = 'CRITICAL' OR ai_severity = 'CRITICAL' ORDER BY created_at DESC LIMIT {DEFAULT_INCIDENT_LIMIT}"
+            "SELECT id, title, COALESCE(ai_severity, severity, 'UNKNOWN') AS severity, status, created_at FROM incidents ORDER BY created_at DESC LIMIT {DEFAULT_INCIDENT_LIMIT}"
         ),
         params![],
         |stmt, params| {
@@ -47,6 +48,9 @@ pub async fn watch_critical_incidents(db: PowerSyncDatabase) -> Result<()> {
                 incidents.push(IncidentSummary {
                     id: row.get("id")?,
                     title: row.get("title")?,
+                    severity: row
+                        .get::<_, Option<String>>("severity")?
+                        .unwrap_or_else(|| "UNKNOWN".to_string()),
                     status: row
                         .get::<_, Option<String>>("status")?
                         .unwrap_or_else(|| "UNKNOWN".to_string()),
@@ -74,7 +78,7 @@ pub async fn watch_critical_incidents(db: PowerSyncDatabase) -> Result<()> {
     Ok(())
 }
 
-pub async fn fetch_critical_incidents(
+pub async fn fetch_live_incidents(
     db: &PowerSyncDatabase,
     limit: i64,
 ) -> Result<Vec<IncidentSummary>> {
@@ -83,7 +87,7 @@ pub async fn fetch_critical_incidents(
         .await
         .context("failed to open SQLite reader for incidents snapshot")?;
     let mut stmt = reader.prepare(
-        "SELECT id, title, status, created_at FROM incidents WHERE severity = 'CRITICAL' OR ai_severity = 'CRITICAL' ORDER BY created_at DESC LIMIT ?",
+        "SELECT id, title, COALESCE(ai_severity, severity, 'UNKNOWN') AS severity, status, created_at FROM incidents ORDER BY created_at DESC LIMIT ?",
     )?;
     let mut rows = stmt.query(params![limit])?;
     let mut incidents = Vec::new();
@@ -92,6 +96,9 @@ pub async fn fetch_critical_incidents(
         incidents.push(IncidentSummary {
             id: row.get("id")?,
             title: row.get("title")?,
+            severity: row
+                .get::<_, Option<String>>("severity")?
+                .unwrap_or_else(|| "UNKNOWN".to_string()),
             status: row
                 .get::<_, Option<String>>("status")?
                 .unwrap_or_else(|| "UNKNOWN".to_string()),
@@ -202,13 +209,13 @@ pub fn format_sync_status(status: &SyncStatusData) -> String {
 }
 
 fn print_incidents(incidents: &[IncidentSummary]) {
-    println!("critical_incidents={}", incidents.len());
+    println!("incidents={}", incidents.len());
 
     for incident in incidents {
         let created_at = incident.created_at.as_deref().unwrap_or("-");
         println!(
-            "{} | {} | {} | {}",
-            created_at, incident.status, incident.id, incident.title
+            "{} | {} | {} | {} | {}",
+            created_at, incident.severity, incident.status, incident.id, incident.title
         );
     }
 }

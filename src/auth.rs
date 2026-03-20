@@ -524,13 +524,155 @@ pub async fn fetch_organizations(session: &Session) -> Result<Vec<OrgInfo>> {
     Ok(orgs)
 }
 
+#[derive(Debug, Deserialize)]
+struct JoinRequestInfo {
+    #[allow(dead_code)]
+    id: String,
+    requester_user_id: String,
+    requested_role: Option<String>,
+    status: Option<String>,
+    #[allow(dead_code)]
+    message: Option<String>,
+    created_at: Option<String>,
+}
+
+pub async fn fetch_org_users(session: &Session) -> Result<(Vec<OrgUserProfile>, usize)> {
+    let client = reqwest::Client::new();
+    let org_id = session.org_id.as_deref().unwrap_or("");
+    if org_id.is_empty() {
+        return Ok((Vec::new(), 0));
+    }
+
+    // Fetch all user_profiles in this org
+    let url = format!(
+        "{}/rest/v1/user_profiles?org_id=eq.{}&select=id,full_name,email,role,membership_status",
+        session.supabase_url, org_id
+    );
+
+    let response = client
+        .get(&url)
+        .header("apikey", &session.supabase_anon_key)
+        .header("Authorization", format!("Bearer {}", session.access_token))
+        .send()
+        .await
+        .context("Failed to fetch org users")?;
+
+    if !response.status().is_success() {
+        return Ok((Vec::new(), 0));
+    }
+
+    let profiles: Vec<OrgUserProfile> = response.json().await.unwrap_or_default();
+    let count = profiles.len();
+    Ok((profiles, count))
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct OrgUserProfile {
+    pub id: String,
+    pub full_name: Option<String>,
+    pub email: Option<String>,
+    pub role: Option<String>,
+    pub membership_status: Option<String>,
+}
+
+pub async fn fetch_join_requests(session: &Session) -> Result<Vec<JoinRequestDisplay>> {
+    let client = reqwest::Client::new();
+    let org_id = session.org_id.as_deref().unwrap_or("");
+    if org_id.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let url = format!(
+        "{}/rest/v1/org_join_requests?org_id=eq.{}&status=neq.cancelled&select=id,requester_user_id,requested_role,status,message,created_at&order=created_at.desc",
+        session.supabase_url, org_id
+    );
+
+    let response = client
+        .get(&url)
+        .header("apikey", &session.supabase_anon_key)
+        .header("Authorization", format!("Bearer {}", session.access_token))
+        .send()
+        .await
+        .context("Failed to fetch join requests")?;
+
+    if !response.status().is_success() {
+        return Ok(Vec::new());
+    }
+
+    let requests: Vec<JoinRequestInfo> = response.json().await.unwrap_or_default();
+
+    // Fetch profiles for requesters
+    let user_ids: Vec<&str> = requests.iter()
+        .map(|r| r.requester_user_id.as_str())
+        .collect();
+
+    let mut profiles_map = std::collections::HashMap::new();
+    for user_id in &user_ids {
+        let profile_url = format!(
+            "{}/rest/v1/user_profiles?id=eq.{}&select=id,full_name,email",
+            session.supabase_url, user_id
+        );
+        if let Ok(resp) = client
+            .get(&profile_url)
+            .header("apikey", &session.supabase_anon_key)
+            .header("Authorization", format!("Bearer {}", session.access_token))
+            .send()
+            .await
+        {
+            if let Ok(profiles) = resp.json::<Vec<OrgUserProfile>>().await {
+                if let Some(profile) = profiles.into_iter().next() {
+                    profiles_map.insert(profile.id.clone(), profile);
+                }
+            }
+        }
+    }
+
+    let display: Vec<JoinRequestDisplay> = requests.into_iter().map(|r| {
+        let profile = profiles_map.get(&r.requester_user_id);
+        let name = profile
+            .and_then(|p| p.full_name.as_deref())
+            .filter(|n| !n.trim().is_empty())
+            .unwrap_or_else(|| profile.and_then(|p| p.email.as_deref()).unwrap_or("Unknown"))
+            .to_string();
+        let email = profile
+            .and_then(|p| p.email.clone())
+            .unwrap_or_else(|| "No email".to_string());
+
+        JoinRequestDisplay {
+            id: r.id,
+            name,
+            email,
+            requested_role: r.requested_role.unwrap_or_else(|| "field_worker".to_string()),
+            status: r.status.unwrap_or_else(|| "pending".to_string()),
+            created_at: r.created_at,
+        }
+    }).collect();
+
+    Ok(display)
+}
+
+#[derive(Debug, Clone)]
+pub struct JoinRequestDisplay {
+    #[allow(dead_code)]
+    pub id: String,
+    pub name: String,
+    pub email: String,
+    pub requested_role: String,
+    pub status: String,
+    pub created_at: Option<String>,
+}
+
 pub async fn fetch_sites(session: &Session) -> Result<Vec<SiteInfo>> {
     let client = reqwest::Client::new();
 
-    let url = format!(
+    let mut url = format!(
         "{}/rest/v1/sites?select=id,name,location,site_type,org_id&active=eq.true",
         session.supabase_url
     );
+    if let Some(org_id) = &session.org_id {
+        url.push_str("&org_id=eq.");
+        url.push_str(org_id);
+    }
 
     let response = client
         .get(&url)
@@ -546,6 +688,39 @@ pub async fn fetch_sites(session: &Session) -> Result<Vec<SiteInfo>> {
 
     let sites: Vec<SiteInfo> = response.json().await.unwrap_or_default();
     Ok(sites)
+}
+
+pub async fn fetch_supervisor_site_count(session: &Session) -> Result<usize> {
+    #[derive(Deserialize)]
+    struct SupervisorAssignment {
+        site_id: Option<String>,
+    }
+
+    let client = reqwest::Client::new();
+    let url = format!(
+        "{}/rest/v1/supervisors?select=site_id&user_id=eq.{}",
+        session.supabase_url, session.user_id
+    );
+
+    let response = client
+        .get(&url)
+        .header("apikey", &session.supabase_anon_key)
+        .header("Authorization", format!("Bearer {}", session.access_token))
+        .send()
+        .await
+        .context("Failed to fetch supervisor site assignments")?;
+
+    if !response.status().is_success() {
+        return Ok(0);
+    }
+
+    let assignments: Vec<SupervisorAssignment> = response.json().await.unwrap_or_default();
+    let unique = assignments
+        .into_iter()
+        .filter_map(|assignment| assignment.site_id)
+        .collect::<std::collections::HashSet<_>>();
+
+    Ok(unique.len())
 }
 
 // ─── Session Validation ─────────────────────────────────────────────────────

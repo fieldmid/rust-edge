@@ -27,6 +27,8 @@ async fn main() {
         cli::Command::Login => app::login().await,
         cli::Command::Logout => app::logout(),
         cli::Command::WhoAmI => app::whoami().await,
+        cli::Command::Users => app::list_users().await,
+        cli::Command::Requests => app::list_requests().await,
         cli::Command::Doctor => app::doctor().await,
         cli::Command::CheckConnectivity => app::check_connectivity().await,
         cli::Command::LatestIncidents => app::show_latest_incidents().await,

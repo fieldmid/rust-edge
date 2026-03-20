@@ -66,7 +66,7 @@ pub async fn run() -> Result<()> {
 
         tokio::select! {
             result = watcher::watch_sync_status(db.clone()) => result?,
-            result = watcher::watch_critical_incidents(db.clone()) => result?,
+            result = watcher::watch_live_incidents(db.clone()) => result?,
             result = watcher::watch_for_local_writes(db.clone()) => result?,
             result = tokio::signal::ctrl_c() => {
                 result.context("failed to listen for shutdown signal")?;
@@ -282,6 +282,160 @@ pub async fn login() -> Result<()> {
     Ok(())
 }
 
+pub async fn list_users() -> Result<()> {
+    println!();
+    let sess = auth::ensure_session().await?;
+
+    if sess.role != "admin" && sess.role != "supervisor" {
+        println!("  \x1b[33m⚠ Only admins and supervisors can view org users.\x1b[0m");
+        println!();
+        return Ok(());
+    }
+
+    let org_name = sess.org_name.as_deref().unwrap_or("your org");
+    println!(
+        "  \x1b[1mFieldMid — Users in {}\x1b[0m",
+        org_name
+    );
+    println!();
+
+    let (users, count) = auth::fetch_org_users(&sess).await?;
+
+    if users.is_empty() {
+        println!("  No users found in this organization.");
+        println!();
+        return Ok(());
+    }
+
+    println!(
+        "  \x1b[1m{}\x1b[0m user(s) total",
+        count
+    );
+    println!();
+    println!(
+        "  {:<28} {:<30} {:<14} {}",
+        "Name", "Email", "Role", "Status"
+    );
+    println!("  {}", "─".repeat(80));
+
+    for user in &users {
+        let name = user.full_name.as_deref().unwrap_or("—");
+        let email = user.email.as_deref().unwrap_or("—");
+        let role = user.role.as_deref().unwrap_or("field_worker");
+        let status = user.membership_status.as_deref().unwrap_or("—");
+
+        let role_colored = match role {
+            "admin" => format!("\x1b[35m{:<14}\x1b[0m", role),
+            "supervisor" => format!("\x1b[36m{:<14}\x1b[0m", role),
+            _ => format!("\x1b[34m{:<14}\x1b[0m", role),
+        };
+
+        let status_colored = match status {
+            "approved" => format!("\x1b[32m{}\x1b[0m", status),
+            "pending" => format!("\x1b[33m{}\x1b[0m", status),
+            "rejected" => format!("\x1b[31m{}\x1b[0m", status),
+            _ => status.to_string(),
+        };
+
+        println!(
+            "  {:<28} {:<30} {} {}",
+            truncate(name, 26),
+            truncate(email, 28),
+            role_colored,
+            status_colored,
+        );
+    }
+
+    println!();
+    Ok(())
+}
+
+pub async fn list_requests() -> Result<()> {
+    println!();
+    let sess = auth::ensure_session().await?;
+
+    if sess.role != "admin" && sess.role != "supervisor" {
+        println!("  \x1b[33m⚠ Only admins and supervisors can view join requests.\x1b[0m");
+        println!();
+        return Ok(());
+    }
+
+    let org_name = sess.org_name.as_deref().unwrap_or("your org");
+    println!(
+        "  \x1b[1mFieldMid — Join Requests for {}\x1b[0m",
+        org_name
+    );
+    println!();
+
+    let requests = auth::fetch_join_requests(&sess).await?;
+
+    let pending: Vec<_> = requests.iter().filter(|r| r.status == "pending").collect();
+    let others: Vec<_> = requests.iter().filter(|r| r.status != "pending").collect();
+
+    if requests.is_empty() {
+        println!("  No join requests found.");
+        println!();
+        return Ok(());
+    }
+
+    if !pending.is_empty() {
+        println!(
+            "  \x1b[33m● {} pending request(s)\x1b[0m",
+            pending.len()
+        );
+        println!();
+        println!(
+            "  {:<24} {:<28} {:<16} {}",
+            "Name", "Email", "Requested Role", "Date"
+        );
+        println!("  {}", "─".repeat(80));
+
+        for req in &pending {
+            let date = req.created_at.as_deref().unwrap_or("—");
+            let short_date = if date.len() > 10 { &date[..10] } else { date };
+            println!(
+                "  {:<24} {:<28} {:<16} {}",
+                truncate(&req.name, 22),
+                truncate(&req.email, 26),
+                req.requested_role,
+                short_date,
+            );
+        }
+        println!();
+    } else {
+        println!("  \x1b[32m✓\x1b[0m No pending join requests.");
+        println!();
+    }
+
+    if !others.is_empty() {
+        println!("  \x1b[2mPrevious requests:\x1b[0m");
+        for req in &others {
+            let status_colored = match req.status.as_str() {
+                "approved" => format!("\x1b[32m{}\x1b[0m", req.status),
+                "rejected" => format!("\x1b[31m{}\x1b[0m", req.status),
+                _ => req.status.clone(),
+            };
+            let date = req.created_at.as_deref().unwrap_or("—");
+            let short_date = if date.len() > 10 { &date[..10] } else { date };
+            println!(
+                "    {} — {} ({}) [{}]",
+                req.name, req.email, status_colored, short_date
+            );
+        }
+        println!();
+    }
+
+    Ok(())
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..max - 1])
+    }
+}
+
 pub fn logout() -> Result<()> {
     if !session::has_session() {
         println!();
@@ -399,7 +553,7 @@ pub async fn check_connectivity() -> Result<()> {
 
     let status = watcher::wait_for_first_sync_status(db.clone(), Duration::from_secs(10)).await?;
     let queue_depth = watcher::read_local_write_queue_depth(&db).await?;
-    let incidents = watcher::fetch_critical_incidents(&db, 5).await?;
+    let incidents = watcher::fetch_live_incidents(&db, 5).await?;
 
     let status_icon = if status == "connected" {
         "\x1b[32m●\x1b[0m"
@@ -415,16 +569,16 @@ pub async fn check_connectivity() -> Result<()> {
     if let Some(org) = &config.org_name {
         println!("  Organization:   {}", org);
     }
-    println!("  Incidents:      {} critical", incidents.len());
+    println!("  Incidents:      {} live", incidents.len());
 
     if !incidents.is_empty() {
         println!();
-        println!("  \x1b[1mRecent Critical Incidents:\x1b[0m");
+        println!("  \x1b[1mRecent Live Incidents:\x1b[0m");
         for incident in incidents {
             let created_at = incident.created_at.as_deref().unwrap_or("—");
             println!(
-                "    \x1b[2m{}\x1b[0m {} \x1b[2m({})\x1b[0m",
-                created_at, incident.title, incident.status
+                "    \x1b[2m{}\x1b[0m [{}] {} \x1b[2m({})\x1b[0m",
+                created_at, incident.severity, incident.title, incident.status
             );
         }
     }
@@ -537,11 +691,14 @@ pub async fn doctor() -> Result<()> {
 
     if db_exists {
         if let Ok(context) = open_database(&base.database_path) {
-            if let Ok(incidents) = watcher::fetch_critical_incidents(&context.db, 3).await {
+            if let Ok(incidents) = watcher::fetch_live_incidents(&context.db, 3).await {
                 println!();
-                println!("  \x1b[1mLocal Critical Snapshot:\x1b[0m {} row(s)", incidents.len());
+                println!("  \x1b[1mLocal Live Snapshot:\x1b[0m {} row(s)", incidents.len());
                 for incident in incidents {
-                    println!("    - {} [{}]", incident.title, incident.status);
+                    println!(
+                        "    - [{}] {} [{}]",
+                        incident.severity, incident.title, incident.status
+                    );
                 }
             }
         }
@@ -557,20 +714,20 @@ pub async fn doctor() -> Result<()> {
 pub async fn show_latest_incidents() -> Result<()> {
     let base = BaseConfig::from_env();
     let context = open_database(&base.database_path)?;
-    let incidents = watcher::fetch_critical_incidents(&context.db, 20).await?;
+    let incidents = watcher::fetch_live_incidents(&context.db, 20).await?;
 
     println!();
     println!(
-        "  \x1b[1mFieldMid Edge — Critical Incidents\x1b[0m \x1b[2m({})\x1b[0m",
+        "  \x1b[1mFieldMid Edge — Live Incidents\x1b[0m \x1b[2m({})\x1b[0m",
         base.database_path.display()
     );
     println!();
 
     if incidents.is_empty() {
-        println!("  \x1b[32m✓\x1b[0m No critical incidents found.");
+        println!("  \x1b[32m✓\x1b[0m No incidents found.");
     } else {
         println!(
-            "  Found \x1b[1m{}\x1b[0m critical incident(s):",
+            "  Found \x1b[1m{}\x1b[0m live incident(s):",
             incidents.len()
         );
         println!();
@@ -583,8 +740,8 @@ pub async fn show_latest_incidents() -> Result<()> {
                 _ => "\x1b[2m",
             };
             println!(
-                "    \x1b[2m{}\x1b[0m  {}{}\x1b[0m  {}",
-                created_at, status_color, incident.status, incident.title
+                "    \x1b[2m{}\x1b[0m  [{}] {}{}\x1b[0m  {}",
+                created_at, incident.severity, status_color, incident.status, incident.title
             );
         }
     }

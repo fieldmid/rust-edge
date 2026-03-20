@@ -7,6 +7,8 @@ pub enum Command {
     Login,
     Logout,
     WhoAmI,
+    Users,
+    Requests,
     Doctor,
     CheckConnectivity,
     LatestIncidents,
@@ -25,6 +27,8 @@ impl Command {
             Some("login") | Some("--login") => Ok(Self::Login),
             Some("logout") | Some("--logout") => Ok(Self::Logout),
             Some("whoami") | Some("--whoami") | Some("who") => Ok(Self::WhoAmI),
+            Some("users") | Some("--users") => Ok(Self::Users),
+            Some("requests") | Some("--requests") | Some("join-requests") => Ok(Self::Requests),
             Some("doctor") | Some("--doctor") => Ok(Self::Doctor),
             Some("check-connectivity") | Some("--check-connectivity") => {
                 Ok(Self::CheckConnectivity)
@@ -48,9 +52,11 @@ pub fn print_help() {
   fieldmid login                  Authenticate via browser or email/password
   fieldmid logout                 Clear stored session
   fieldmid whoami                 Show current auth status and org info
+  fieldmid users                  List all users in your organization
+  fieldmid requests               Show pending join requests for your org
     fieldmid doctor                 Diagnose env, session, DB, DNS, and connectivity
   fieldmid check-connectivity     Test PowerSync connectivity
-  fieldmid latest-incidents       Show latest critical incidents from local DB
+    fieldmid latest-incidents       Show latest live incidents from local DB
     fieldmid install-hint           Print planned curl installer command
   fieldmid help                   Show this help
 
@@ -58,6 +64,8 @@ pub fn print_help() {
   cargo run --bin fieldmid
   cargo run --bin fieldmid -- login
   cargo run --bin fieldmid -- whoami
+  cargo run --bin fieldmid -- users
+  cargo run --bin fieldmid -- requests
     cargo run --bin fieldmid -- doctor
   cargo run --bin fieldmid -- check-connectivity
   cargo run --bin fieldmid -- latest-incidents
@@ -127,6 +135,18 @@ mod tests {
         assert!(matches!(
             Command::parse_arg(Some("whoami")),
             Ok(Command::WhoAmI)
+        ));
+        assert!(matches!(
+            Command::parse_arg(Some("users")),
+            Ok(Command::Users)
+        ));
+        assert!(matches!(
+            Command::parse_arg(Some("requests")),
+            Ok(Command::Requests)
+        ));
+        assert!(matches!(
+            Command::parse_arg(Some("join-requests")),
+            Ok(Command::Requests)
         ));
     }
 }

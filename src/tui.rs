@@ -27,6 +27,8 @@ use crate::{
     watcher::{self, IncidentSummary},
 };
 
+const METRICS_REFRESH_SECONDS: u64 = 20;
+
 const C1: Color = Color::Rgb(142, 197, 255);
 const C2: Color = Color::Rgb(43, 127, 255);
 const C3: Color = Color::Rgb(21, 93, 252);
@@ -57,6 +59,9 @@ struct DashboardState {
     last_error: Option<String>,
     started_at: Instant,
     last_update_at: Option<Instant>,
+    site_count: usize,
+    user_count: usize,
+    pending_requests: usize,
 }
 
 impl DashboardState {
@@ -68,6 +73,9 @@ impl DashboardState {
             last_error: None,
             started_at: Instant::now(),
             last_update_at: None,
+            site_count: 0,
+            user_count: 0,
+            pending_requests: 0,
         }
     }
 
@@ -84,7 +92,7 @@ pub async fn run(db: PowerSyncDatabase, config: TuiConfig) -> Result<()> {
     let mut status_stream = std::pin::pin!(status_stream);
 
     let incidents_stream = db.watch_statement(
-        "SELECT id, title, status, created_at FROM incidents WHERE severity = 'CRITICAL' OR ai_severity = 'CRITICAL' ORDER BY created_at DESC LIMIT 20".to_string(),
+        "SELECT id, title, COALESCE(ai_severity, severity, 'UNKNOWN') AS severity, status, created_at FROM incidents ORDER BY created_at DESC LIMIT 20".to_string(),
         params![],
         |stmt, params| {
             let mut rows = stmt.query(params)?;
@@ -94,6 +102,9 @@ pub async fn run(db: PowerSyncDatabase, config: TuiConfig) -> Result<()> {
                 incidents.push(IncidentSummary {
                     id: row.get("id")?,
                     title: row.get("title")?,
+                    severity: row
+                        .get::<_, Option<String>>("severity")?
+                        .unwrap_or_else(|| "UNKNOWN".to_string()),
                     status: row
                         .get::<_, Option<String>>("status")?
                         .unwrap_or_else(|| "UNKNOWN".to_string()),
@@ -108,6 +119,17 @@ pub async fn run(db: PowerSyncDatabase, config: TuiConfig) -> Result<()> {
 
     let mut queue_tick = tokio::time::interval(Duration::from_millis(750));
     let mut draw_tick = tokio::time::interval(Duration::from_millis(100));
+    let mut metrics_tick = tokio::time::interval(Duration::from_secs(METRICS_REFRESH_SECONDS));
+
+    let is_admin_or_supervisor = config.role.as_deref() == Some("admin")
+        || config.role.as_deref() == Some("supervisor");
+
+    // Fetch user count and pending requests from Supabase REST API once at startup
+    if is_admin_or_supervisor {
+        if let Ok(sess) = crate::auth::ensure_session().await {
+            hydrate_runtime_metrics(&mut state, &sess).await;
+        }
+    }
 
     let result = async {
         loop {
@@ -129,7 +151,7 @@ pub async fn run(db: PowerSyncDatabase, config: TuiConfig) -> Result<()> {
                                 state.mark_update();
                             }
                             Err(error) => {
-                                state.last_error = Some(format!("critical incident watcher failed: {error}"));
+                                state.last_error = Some(format!("incident watcher failed: {error}"));
                                 state.mark_update();
                             }
                         }
@@ -141,6 +163,12 @@ pub async fn run(db: PowerSyncDatabase, config: TuiConfig) -> Result<()> {
                         if depth > 0 {
                             break Err(anyhow::anyhow!(watcher::local_write_guard_message(depth)));
                         }
+                    }
+                }
+                _ = metrics_tick.tick(), if is_admin_or_supervisor => {
+                    if let Ok(sess) = crate::auth::ensure_session().await {
+                        hydrate_runtime_metrics(&mut state, &sess).await;
+                        state.mark_update();
                     }
                 }
                 _ = draw_tick.tick() => {
@@ -202,7 +230,7 @@ fn draw(area: Rect, frame: &mut ratatui::Frame, state: &DashboardState, config: 
 
     frame.render_widget(sync_block(state), left[0]);
     frame.render_widget(queue_block(state), left[1]);
-    frame.render_widget(config_block(config), left[2]);
+    frame.render_widget(config_block(config, state), left[2]);
     frame.render_widget(incidents_block(state), main[1]);
     frame.render_widget(footer(state), root[2]);
 }
@@ -343,7 +371,7 @@ fn sync_block(state: &DashboardState) -> Paragraph<'static> {
 
 fn queue_block(state: &DashboardState) -> Paragraph<'static> {
     let body = vec![Line::from(vec![
-        Span::styled("Critical rows  ", Style::default().fg(MUTED)),
+        Span::styled("Live rows  ", Style::default().fg(MUTED)),
         Span::styled(
             state.incidents.len().to_string(),
             Style::default().fg(C1).add_modifier(Modifier::BOLD),
@@ -359,7 +387,7 @@ fn queue_block(state: &DashboardState) -> Paragraph<'static> {
         .wrap(Wrap { trim: true })
 }
 
-fn config_block(config: &TuiConfig) -> Paragraph<'static> {
+fn config_block(config: &TuiConfig, state: &DashboardState) -> Paragraph<'static> {
     let mut lines = vec![];
 
     if let Some(email) = &config.email {
@@ -389,6 +417,35 @@ fn config_block(config: &TuiConfig) -> Paragraph<'static> {
             Span::styled("Org     ", Style::default().fg(MUTED)),
             Span::styled(org.clone(), Style::default().fg(C1).add_modifier(Modifier::BOLD)),
         ]));
+    }
+
+    let is_admin_or_supervisor = config.role.as_deref() == Some("admin")
+        || config.role.as_deref() == Some("supervisor");
+
+    if is_admin_or_supervisor {
+        lines.push(Line::from(vec![
+            Span::styled("Users   ", Style::default().fg(MUTED)),
+            Span::styled(
+                format!("{}", state.user_count),
+                Style::default().fg(C1).add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("Sites   ", Style::default().fg(MUTED)),
+            Span::styled(
+                format!("{}", state.site_count),
+                Style::default().fg(C1).add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        if state.pending_requests > 0 {
+            lines.push(Line::from(vec![
+                Span::styled("Pending ", Style::default().fg(MUTED)),
+                Span::styled(
+                    format!("{} join request(s)", state.pending_requests),
+                    Style::default().fg(WARNING).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+        }
     }
 
     lines.push(Line::from(vec![
@@ -454,7 +511,7 @@ fn config_block(config: &TuiConfig) -> Paragraph<'static> {
 fn incidents_block(state: &DashboardState) -> List<'static> {
     let items: Vec<ListItem<'static>> = if state.incidents.is_empty() {
         vec![ListItem::new(Line::from(vec![Span::styled(
-            "No critical incidents in local replica yet.",
+            "No incidents in local replica yet.",
             Style::default().fg(MUTED),
         )]))]
     } else {
@@ -464,13 +521,13 @@ fn incidents_block(state: &DashboardState) -> List<'static> {
             .map(|incident| {
                 let id_short = short_id(&incident.id);
                 let created = incident.created_at.as_deref().unwrap_or("-");
-                let title = format!("{} [{}]", incident.title, incident.status);
+                let title = format!("[{}] {} [{}]", incident.severity, incident.title, incident.status);
                 let meta = format!("{created}  |  {id_short}");
 
                 ListItem::new(Text::from(vec![
                     Line::from(vec![Span::styled(
                         title,
-                        Style::default().fg(ERROR).add_modifier(Modifier::BOLD),
+                        severity_style(&incident.severity).add_modifier(Modifier::BOLD),
                     )]),
                     Line::from(vec![Span::styled(meta, Style::default().fg(MUTED))]),
                 ]))
@@ -480,7 +537,7 @@ fn incidents_block(state: &DashboardState) -> List<'static> {
 
     List::new(items).block(
         Block::bordered()
-            .title(" Critical Incident Feed ")
+            .title(" Live Incident Feed ")
             .border_style(Style::default().fg(C2)),
     )
 }
@@ -633,6 +690,39 @@ fn connectivity_style(level: u8) -> Style {
         0 => Style::default().fg(ERROR),
         1 | 2 => Style::default().fg(WARNING),
         _ => Style::default().fg(SUCCESS),
+    }
+}
+
+fn severity_style(severity: &str) -> Style {
+    match severity {
+        "CRITICAL" => Style::default().fg(ERROR),
+        "HIGH" => Style::default().fg(WARNING),
+        "MEDIUM" => Style::default().fg(Color::LightYellow),
+        "LOW" => Style::default().fg(SUCCESS),
+        _ => Style::default().fg(C1),
+    }
+}
+
+async fn hydrate_runtime_metrics(state: &mut DashboardState, session: &crate::session::Session) {
+    if let Ok((_, count)) = crate::auth::fetch_org_users(session).await {
+        state.user_count = count;
+    }
+
+    if let Ok(requests) = crate::auth::fetch_join_requests(session).await {
+        state.pending_requests = requests
+            .iter()
+            .filter(|request| request.status == "pending")
+            .count();
+    }
+
+    if session.role == "admin" {
+        if let Ok(sites) = crate::auth::fetch_sites(session).await {
+            state.site_count = sites.len();
+        }
+    } else if session.role == "supervisor" {
+        if let Ok(count) = crate::auth::fetch_supervisor_site_count(session).await {
+            state.site_count = count;
+        }
     }
 }
 
