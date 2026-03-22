@@ -1,0 +1,74 @@
+# This workflow builds the Rust project and publishes a release with binaries for Linux and macOS (x86_64 and aarch64)
+# on every push to main and on every new tag.
+
+name: Build and Release FieldMid CLI
+
+on:
+  push:
+    branches: [ main ]
+  release:
+    types: [created]
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64
+            rust_target: x86_64-unknown-linux-gnu
+            artifact_name: fieldmid-linux-x86_64
+          - os: ubuntu-latest
+            target: aarch64
+            rust_target: aarch64-unknown-linux-gnu
+            artifact_name: fieldmid-linux-aarch64
+          - os: macos-latest
+            target: x86_64
+            rust_target: x86_64-apple-darwin
+            artifact_name: fieldmid-macos-x86_64
+          - os: macos-latest
+            target: aarch64
+            rust_target: aarch64-apple-darwin
+            artifact_name: fieldmid-macos-aarch64
+          - os: windows-latest
+            target: x86_64
+            rust_target: x86_64-pc-windows-msvc
+            artifact_name: fieldmid-windows-x86_64.exe
+          - os: windows-latest
+            target: aarch64
+            rust_target: aarch64-pc-windows-msvc
+            artifact_name: fieldmid-windows-aarch64.exe
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.rust_target }}
+          override: true
+      - name: Build binary
+        run: |
+          cargo build --release --target ${{ matrix.rust_target }}
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            target/${{ matrix.rust_target }}/release/fieldmid*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./artifacts/**/fieldmid*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,6 +1,6 @@
-use std::{env, fs, path::PathBuf};
+use std::{fs, path::PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::Value;
 
 use crate::{auth, session};
@@ -29,16 +29,9 @@ pub struct SyncStreamConfig {
 
 impl BaseConfig {
     pub fn from_env() -> Self {
-        dotenvy::dotenv().ok();
-
-        let configured_device_id = optional_env("DEVICE_ID")
-            .filter(|value| value != "fieldmid-edge-001");
-
         Self {
-            device_id: configured_device_id.unwrap_or_else(auto_device_id),
-            database_path: env::var_os("FIELDMID_DB_PATH")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("fieldmid-edge.db")),
+            device_id: auto_device_id(),
+            database_path: PathBuf::from("fieldmid-edge.db"),
         }
     }
 }
@@ -52,8 +45,7 @@ impl DaemonConfig {
         }
 
         let sess = auth::ensure_session().await?;
-        let powersync_url = optional_value("POWERSYNC_URL", &|key| env::var(key).ok())
-            .context("POWERSYNC_URL is required")?;
+        let powersync_url = "https://69b1eb15d42a433951017c06.powersync.journeyapps.com".to_string();
 
         let sync_stream = match sess.role.as_str() {
             "admin" => Some(SyncStreamConfig {
@@ -77,24 +69,6 @@ impl DaemonConfig {
             email: Some(sess.email.clone()),
         })
     }
-}
-
-fn optional_value<F>(name: &str, env_value: &F) -> Option<String>
-where
-    F: Fn(&str) -> Option<String>,
-{
-    env_value(name).and_then(|value| {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    })
-}
-
-fn optional_env(name: &str) -> Option<String> {
-    optional_value(name, &|key| env::var(key).ok())
 }
 
 fn auto_device_id() -> String {

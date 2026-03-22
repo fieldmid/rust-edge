@@ -57,28 +57,16 @@ fieldmid help                    # Show help
 
 ## Setup
 
-### 1. Environment Variables
+### 1. Configuration
 
-```bash
-cp .env.example .env
-```
+This binary ships with shared built-in service configuration for all users:
 
-Required:
-```env
-POWERSYNC_URL=https://<instance>.powersync.journeyapps.com
-POWERSYNC_TOKEN=<jwt-token>
-```
+- `POWERSYNC_URL`: `https://69b1eb15d42a433951017c06.powersync.journeyapps.com`
+- `SUPABASE_URL`: `https://ktohrdqtvqimvcostvcu.supabase.co`
+- `SUPABASE_ANON_KEY`: publishable anon key (public)
+- `FIELDMID_DASHBOARD_URL`: `https://app.fieldmid.com`
 
-Optional:
-```env
-POWERSYNC_STREAM=edge_critical_feed
-POWERSYNC_STREAM_PARAMS={"site_id":"<site-uuid>"}
-DEVICE_ID=<custom-device-id>
-FIELDMID_DB_PATH=fieldmid-edge.db
-SUPABASE_URL=https://<project-ref>.supabase.co
-SUPABASE_ANON_KEY=<anon-key>
-FIELDMID_DASHBOARD_URL=http://localhost:3000
-```
+No `.env` file is required.
 
 ### 2. Build & Run
 

@@ -71,13 +71,9 @@ pub fn print_help() {
   cargo run --bin fieldmid -- latest-incidents
     cargo run --bin fieldmid -- install-hint
 
-\x1b[1mEnvironment:\x1b[0m
-  SUPABASE_URL              Supabase project URL (for auth)
-  SUPABASE_ANON_KEY         Supabase anonymous key (for auth)
-  POWERSYNC_URL             PowerSync instance URL
-  DEVICE_ID                 Edge device identifier
-  FIELDMID_DB_PATH          Local SQLite database path
-  FIELDMID_DASHBOARD_URL    Core dashboard URL (for browser login)"
+\x1b[1mConfiguration:\x1b[0m
+    Shared service URLs/keys are built into this binary
+    Local DB path defaults to ./fieldmid-edge.db"
     );
 }
 

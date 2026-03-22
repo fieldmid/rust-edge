@@ -98,14 +98,10 @@ pub async fn login() -> Result<()> {
     banner::print_banner();
     println!("\n  \x1b[1mFieldMid Edge — Authentication\x1b[0m\n");
 
-    dotenvy::dotenv().ok();
-
-    let supabase_url = std::env::var("SUPABASE_URL")
-        .unwrap_or_else(|_| "https://ktohrdqtvqimvcostvcu.supabase.co".to_string());
-    let anon_key = std::env::var("SUPABASE_ANON_KEY")
-        .unwrap_or_else(|_| "sb_publishable_McJGO7Sh2_JR81mmbKkVZA_AydlBOHQ".to_string());
-    let core_url = std::env::var("FIELDMID_DASHBOARD_URL")
-        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+    // Shared defaults for all users; no .env file is required.
+    let supabase_url = "https://ktohrdqtvqimvcostvcu.supabase.co".to_string();
+    let anon_key = "sb_publishable_McJGO7Sh2_JR81mmbKkVZA_AydlBOHQ".to_string();
+    let core_url = "https://app.fieldmid.com".to_string();
 
     // Determine login method
     let use_browser = if std::io::stdin().is_terminal() {
@@ -759,8 +755,6 @@ pub async fn check_connectivity() -> Result<()> {
 }
 
 pub async fn doctor() -> Result<()> {
-    dotenvy::dotenv().ok();
-
     println!();
     println!("  \x1b[1mFieldMid Edge — Doctor\x1b[0m");
     println!();
@@ -783,25 +777,21 @@ pub async fn doctor() -> Result<()> {
     );
 
     println!();
-    println!("  \x1b[1mEnvironment:\x1b[0m");
-    let powersync_url = std::env::var("POWERSYNC_URL").unwrap_or_default();
-    let dashboard_url = std::env::var("FIELDMID_DASHBOARD_URL").unwrap_or_default();
+    println!("  \x1b[1mConfiguration:\x1b[0m");
+    let powersync_url = "https://69b1eb15d42a433951017c06.powersync.journeyapps.com";
+    let dashboard_url = "https://app.fieldmid.com";
     println!("    POWERSYNC_URL:        {}", mask_env_value(&powersync_url));
     println!(
         "    SUPABASE_URL:         {}",
-        mask_env_value(&std::env::var("SUPABASE_URL").unwrap_or_default())
+        mask_env_value("https://ktohrdqtvqimvcostvcu.supabase.co")
     );
     println!(
         "    SUPABASE_ANON_KEY:    {}",
-        if std::env::var("SUPABASE_ANON_KEY").ok().filter(|v| !v.is_empty()).is_some() {
-            "set"
-        } else {
-            "missing"
-        }
+        "set"
     );
     println!(
         "    FIELDMID_DASHBOARD_URL: {}",
-        mask_env_value(&dashboard_url)
+        mask_env_value(dashboard_url)
     );
 
     println!();
@@ -826,10 +816,7 @@ pub async fn doctor() -> Result<()> {
 
     println!();
     println!("  \x1b[1mPowerSync Connectivity:\x1b[0m");
-    if powersync_url.is_empty() {
-        println!("    DNS:       skipped (POWERSYNC_URL missing)");
-        println!("    HTTP:      skipped (POWERSYNC_URL missing)");
-    } else if let Ok(url) = Url::parse(&powersync_url) {
+    if let Ok(url) = Url::parse(powersync_url) {
         let host = url.host_str().unwrap_or_default();
         let port = url.port_or_known_default().unwrap_or(443);
         let lookup = format!("{}:{}", host, port);
