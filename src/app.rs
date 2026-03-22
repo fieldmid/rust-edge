@@ -367,62 +367,222 @@ pub async fn list_requests() -> Result<()> {
     );
     println!();
 
-    let requests = auth::fetch_join_requests(&sess).await?;
+    // Try local-first: read from PowerSync-synced SQLite
+    let base = BaseConfig::from_env();
+    let context = open_database(&base.database_path)?;
+    let db = context.db;
+    let mut local_requests = watcher::fetch_local_join_requests(&db, None).await?;
 
-    let pending: Vec<_> = requests.iter().filter(|r| r.status == "pending").collect();
-    let others: Vec<_> = requests.iter().filter(|r| r.status != "pending").collect();
-
-    if requests.is_empty() {
-        println!("  No join requests found.");
-        println!();
-        return Ok(());
+    // If local is empty, try syncing first
+    if local_requests.is_empty() && session::has_session() {
+        if let Ok(config) = DaemonConfig::from_env_or_session().await {
+            print!("  \x1b[2mSyncing from cloud...\x1b[0m");
+            db.async_tasks().spawn_with_tokio();
+            let connector = FieldMidConnector::new(
+                config.powersync_url.clone(),
+                config.powersync_token.clone(),
+            );
+            db.connect(SyncOptions::new(connector)).await;
+            let _sub = subscribe_stream_if_configured(&db, &config).await?;
+            let _ =
+                watcher::wait_for_first_sync_status(db.clone(), Duration::from_secs(10)).await;
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            local_requests = watcher::fetch_local_join_requests(&db, None).await?;
+            println!(" \x1b[32m✓\x1b[0m");
+            db.disconnect().await;
+        }
     }
 
-    if !pending.is_empty() {
-        println!(
-            "  \x1b[33m● {} pending request(s)\x1b[0m",
-            pending.len()
-        );
-        println!();
-        println!(
-            "  {:<24} {:<28} {:<16} {}",
-            "Name", "Email", "Requested Role", "Date"
-        );
-        println!("  {}", "─".repeat(80));
+    // If we got local data, use it (offline-first)
+    if !local_requests.is_empty() {
+        let pending: Vec<_> = local_requests
+            .iter()
+            .filter(|r| r.status == "pending")
+            .collect();
+        let others: Vec<_> = local_requests
+            .iter()
+            .filter(|r| r.status != "pending")
+            .collect();
 
-        for req in &pending {
-            let date = req.created_at.as_deref().unwrap_or("—");
-            let short_date = if date.len() > 10 { &date[..10] } else { date };
+        if !pending.is_empty() {
             println!(
-                "  {:<24} {:<28} {:<16} {}",
-                truncate(&req.name, 22),
-                truncate(&req.email, 26),
-                req.requested_role,
-                short_date,
+                "  \x1b[33m● {} pending request(s)\x1b[0m",
+                pending.len()
             );
+            println!();
+            println!(
+                "  {:<4} {:<24} {:<28} {:<16} {}",
+                "#", "Name", "Email", "Requested Role", "Date"
+            );
+            println!("  {}", "─".repeat(84));
+
+            for (i, req) in pending.iter().enumerate() {
+                let name = req
+                    .requester_name
+                    .as_deref()
+                    .unwrap_or_else(|| req.requester_email.as_deref().unwrap_or("Unknown"));
+                let email = req.requester_email.as_deref().unwrap_or("—");
+                let date = req.created_at.as_deref().unwrap_or("—");
+                let short_date = if date.len() > 10 { &date[..10] } else { date };
+                println!(
+                    "  {:<4} {:<24} {:<28} {:<16} {}",
+                    i + 1,
+                    truncate(name, 22),
+                    truncate(email, 26),
+                    req.requested_role,
+                    short_date,
+                );
+            }
+            println!();
+
+            // Interactive approve/reject if terminal
+            if std::io::stdin().is_terminal() && !pending.is_empty() {
+                let actions = vec!["Skip (do nothing)", "Approve or reject requests"];
+                let choice = dialoguer::Select::new()
+                    .with_prompt("  Action")
+                    .items(&actions)
+                    .default(0)
+                    .interact()
+                    .context("failed to select action")?;
+
+                if choice == 1 {
+                    for req in &pending {
+                        let name = req
+                            .requester_name
+                            .as_deref()
+                            .unwrap_or_else(|| {
+                                req.requester_email.as_deref().unwrap_or("Unknown")
+                            });
+                        println!();
+                        println!(
+                            "  \x1b[1m{}\x1b[0m ({}) — wants to join as \x1b[1m{}\x1b[0m",
+                            name,
+                            req.requester_email.as_deref().unwrap_or("—"),
+                            req.requested_role
+                        );
+                        if let Some(msg) = &req.message {
+                            if !msg.is_empty() {
+                                println!("  \x1b[2mMessage: {}\x1b[0m", msg);
+                            }
+                        }
+
+                        let decisions = vec!["Skip", "Approve", "Reject"];
+                        let decision = dialoguer::Select::new()
+                            .with_prompt("  Decision")
+                            .items(&decisions)
+                            .default(0)
+                            .interact()
+                            .context("failed to select decision")?;
+
+                        match decision {
+                            1 => {
+                                print!("  \x1b[2mApproving...\x1b[0m");
+                                match auth::decide_join_request(&sess, &req.id, "approved").await {
+                                    Ok(()) => println!(
+                                        " \x1b[32m✓ Approved!\x1b[0m"
+                                    ),
+                                    Err(e) => println!(
+                                        " \x1b[31m✗ {}\x1b[0m",
+                                        e
+                                    ),
+                                }
+                            }
+                            2 => {
+                                print!("  \x1b[2mRejecting...\x1b[0m");
+                                match auth::decide_join_request(&sess, &req.id, "rejected").await {
+                                    Ok(()) => println!(
+                                        " \x1b[32m✓ Rejected.\x1b[0m"
+                                    ),
+                                    Err(e) => println!(
+                                        " \x1b[31m✗ {}\x1b[0m",
+                                        e
+                                    ),
+                                }
+                            }
+                            _ => {
+                                println!("  \x1b[2mSkipped.\x1b[0m");
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            println!("  \x1b[32m✓\x1b[0m No pending join requests.");
+            println!();
         }
-        println!();
+
+        if !others.is_empty() {
+            println!();
+            println!("  \x1b[2mPrevious requests:\x1b[0m");
+            for req in &others {
+                let name = req
+                    .requester_name
+                    .as_deref()
+                    .unwrap_or_else(|| req.requester_email.as_deref().unwrap_or("Unknown"));
+                let email = req.requester_email.as_deref().unwrap_or("—");
+                let status_colored = match req.status.as_str() {
+                    "approved" => format!("\x1b[32m{}\x1b[0m", req.status),
+                    "rejected" => format!("\x1b[31m{}\x1b[0m", req.status),
+                    _ => req.status.clone(),
+                };
+                let date = req.created_at.as_deref().unwrap_or("—");
+                let short_date = if date.len() > 10 { &date[..10] } else { date };
+                println!(
+                    "    {} — {} ({}) [{}]",
+                    name, email, status_colored, short_date
+                );
+            }
+            println!();
+        }
     } else {
-        println!("  \x1b[32m✓\x1b[0m No pending join requests.");
-        println!();
-    }
-
-    if !others.is_empty() {
-        println!("  \x1b[2mPrevious requests:\x1b[0m");
-        for req in &others {
-            let status_colored = match req.status.as_str() {
-                "approved" => format!("\x1b[32m{}\x1b[0m", req.status),
-                "rejected" => format!("\x1b[31m{}\x1b[0m", req.status),
-                _ => req.status.clone(),
-            };
-            let date = req.created_at.as_deref().unwrap_or("—");
-            let short_date = if date.len() > 10 { &date[..10] } else { date };
-            println!(
-                "    {} — {} ({}) [{}]",
-                req.name, req.email, status_colored, short_date
-            );
+        // Fallback to API if local DB has no data at all
+        let requests = auth::fetch_join_requests(&sess).await?;
+        if requests.is_empty() {
+            println!("  No join requests found.");
+            println!();
+            return Ok(());
         }
-        println!();
+
+        let pending: Vec<_> = requests.iter().filter(|r| r.status == "pending").collect();
+        let others: Vec<_> = requests.iter().filter(|r| r.status != "pending").collect();
+
+        if !pending.is_empty() {
+            println!(
+                "  \x1b[33m● {} pending request(s)\x1b[0m \x1b[2m(from API — local sync pending)\x1b[0m",
+                pending.len()
+            );
+            println!();
+            for req in &pending {
+                let date = req.created_at.as_deref().unwrap_or("—");
+                let short_date = if date.len() > 10 { &date[..10] } else { date };
+                println!(
+                    "    {} — {} ({}) [{}]",
+                    req.name, req.email, req.requested_role, short_date
+                );
+            }
+            println!();
+        } else {
+            println!("  \x1b[32m✓\x1b[0m No pending join requests.");
+            println!();
+        }
+
+        if !others.is_empty() {
+            println!("  \x1b[2mPrevious requests:\x1b[0m");
+            for req in &others {
+                let status_colored = match req.status.as_str() {
+                    "approved" => format!("\x1b[32m{}\x1b[0m", req.status),
+                    "rejected" => format!("\x1b[31m{}\x1b[0m", req.status),
+                    _ => req.status.clone(),
+                };
+                let date = req.created_at.as_deref().unwrap_or("—");
+                let short_date = if date.len() > 10 { &date[..10] } else { date };
+                println!(
+                    "    {} — {} ({}) [{}]",
+                    req.name, req.email, status_colored, short_date
+                );
+            }
+            println!();
+        }
     }
 
     Ok(())
@@ -461,14 +621,24 @@ pub fn logout() -> Result<()> {
 
 pub fn print_install_hint() -> Result<()> {
     let script_url = std::env::var("FIELDMID_INSTALL_SCRIPT_URL")
-        .unwrap_or_else(|_| "https://downloads.fieldmid.dev/install.sh".to_string());
+        .unwrap_or_else(|_| "https://fieldmid.com/install.sh".to_string());
 
     println!();
-    println!("  \x1b[1mFieldMid CLI install (planned)\x1b[0m");
+    println!("  \x1b[1mFieldMid CLI — Install\x1b[0m");
     println!();
-    println!("  curl -fsSL {} | sh", script_url);
+    println!("  \x1b[1mOption 1:\x1b[0m One-line installer (downloads pre-built binary or builds from source)");
     println!();
-    println!("  Tip: set FIELDMID_INSTALL_SCRIPT_URL to test a staging installer URL.");
+    println!("    curl -fsSL {} | sh", script_url);
+    println!();
+    println!("  \x1b[1mOption 2:\x1b[0m Build from source with Cargo");
+    println!();
+    println!("    cargo install --git https://github.com/fieldmid/rust-edge-repo.git");
+    println!();
+    println!("  \x1b[1mAfter install:\x1b[0m");
+    println!("    fieldmid login              # Authenticate via browser");
+    println!("    fieldmid                    # Start the edge daemon");
+    println!("    fieldmid latest-incidents   # View synced incidents");
+    println!("    fieldmid requests           # View and approve join requests");
     println!();
 
     Ok(())
@@ -714,7 +884,35 @@ pub async fn doctor() -> Result<()> {
 pub async fn show_latest_incidents() -> Result<()> {
     let base = BaseConfig::from_env();
     let context = open_database(&base.database_path)?;
-    let incidents = watcher::fetch_live_incidents(&context.db, 20).await?;
+    let db = context.db;
+
+    // Try local-first: show cached data if available
+    let mut incidents = watcher::fetch_live_incidents(&db, 20).await?;
+
+    // If local DB is empty and we have a session, connect to PowerSync and sync
+    if incidents.is_empty() && session::has_session() {
+        if let Ok(config) = DaemonConfig::from_env_or_session().await {
+            println!();
+            print!("  \x1b[2mLocal replica empty, syncing from cloud...\x1b[0m");
+            db.async_tasks().spawn_with_tokio();
+
+            let connector = FieldMidConnector::new(
+                config.powersync_url.clone(),
+                config.powersync_token.clone(),
+            );
+            db.connect(SyncOptions::new(connector)).await;
+            let _subscription = subscribe_stream_if_configured(&db, &config).await?;
+
+            // Wait for initial sync (up to 15s)
+            let _ =
+                watcher::wait_for_first_sync_status(db.clone(), Duration::from_secs(15)).await;
+            // Small delay to let data populate
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            incidents = watcher::fetch_live_incidents(&db, 20).await?;
+            println!(" \x1b[32m✓\x1b[0m");
+            db.disconnect().await;
+        }
+    }
 
     println!();
     println!(
@@ -724,24 +922,39 @@ pub async fn show_latest_incidents() -> Result<()> {
     println!();
 
     if incidents.is_empty() {
-        println!("  \x1b[32m✓\x1b[0m No incidents found.");
+        println!("  No incidents in this organization yet.");
+        println!();
+        println!("  \x1b[2mIncidents will appear here once field workers report them");
+        println!("  from the mobile app or web dashboard.\x1b[0m");
     } else {
         println!(
             "  Found \x1b[1m{}\x1b[0m live incident(s):",
             incidents.len()
         );
         println!();
-        for incident in incidents {
+        for incident in &incidents {
             let created_at = incident.created_at.as_deref().unwrap_or("—");
+            let severity_color = match incident.severity.as_str() {
+                "CRITICAL" => "\x1b[31;1m",
+                "HIGH" => "\x1b[33;1m",
+                "MEDIUM" => "\x1b[33m",
+                "LOW" => "\x1b[32m",
+                _ => "\x1b[2m",
+            };
             let status_color = match incident.status.as_str() {
                 "open" => "\x1b[31m",
-                "in_progress" => "\x1b[33m",
-                "resolved" => "\x1b[32m",
+                "in_progress" | "escalated" => "\x1b[33m",
+                "resolved" | "closed" => "\x1b[32m",
                 _ => "\x1b[2m",
             };
             println!(
-                "    \x1b[2m{}\x1b[0m  [{}] {}{}\x1b[0m  {}",
-                created_at, incident.severity, status_color, incident.status, incident.title
+                "    \x1b[2m{}\x1b[0m  {}[{:8}]\x1b[0m  {}{}\x1b[0m  {}",
+                created_at,
+                severity_color,
+                incident.severity,
+                status_color,
+                incident.status,
+                incident.title
             );
         }
     }

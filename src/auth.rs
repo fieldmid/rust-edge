@@ -662,6 +662,39 @@ pub struct JoinRequestDisplay {
     pub created_at: Option<String>,
 }
 
+pub async fn decide_join_request(
+    session: &Session,
+    request_id: &str,
+    decision: &str,
+) -> Result<()> {
+    let client = reqwest::Client::new();
+
+    let url = format!(
+        "{}/rest/v1/rpc/decide_org_join_request",
+        session.supabase_url
+    );
+
+    let response = client
+        .post(&url)
+        .header("apikey", &session.supabase_anon_key)
+        .header("Authorization", format!("Bearer {}", session.access_token))
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({
+            "p_request_id": request_id,
+            "p_decision": decision,
+        }))
+        .send()
+        .await
+        .context("Failed to send join request decision")?;
+
+    if !response.status().is_success() {
+        let body = response.text().await.unwrap_or_default();
+        bail!("Failed to {} request: {}", decision, body);
+    }
+
+    Ok(())
+}
+
 pub async fn fetch_sites(session: &Session) -> Result<Vec<SiteInfo>> {
     let client = reqwest::Client::new();
 

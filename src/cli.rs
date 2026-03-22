@@ -53,7 +53,7 @@ pub fn print_help() {
   fieldmid logout                 Clear stored session
   fieldmid whoami                 Show current auth status and org info
   fieldmid users                  List all users in your organization
-  fieldmid requests               Show pending join requests for your org
+  fieldmid requests               View and approve/reject join requests
     fieldmid doctor                 Diagnose env, session, DB, DNS, and connectivity
   fieldmid check-connectivity     Test PowerSync connectivity
     fieldmid latest-incidents       Show latest live incidents from local DB

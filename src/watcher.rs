@@ -220,6 +220,88 @@ fn print_incidents(incidents: &[IncidentSummary]) {
     }
 }
 
+// ─── Local-first queries for join requests and user profiles ────────────────
+
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub struct LocalJoinRequest {
+    pub id: String,
+    pub requester_user_id: String,
+    pub requested_role: String,
+    pub status: String,
+    pub message: Option<String>,
+    pub created_at: Option<String>,
+    /// Resolved from local user_profiles table
+    pub requester_name: Option<String>,
+    pub requester_email: Option<String>,
+}
+
+pub async fn fetch_local_join_requests(
+    db: &PowerSyncDatabase,
+    status_filter: Option<&str>,
+) -> Result<Vec<LocalJoinRequest>> {
+    let reader = db
+        .reader()
+        .await
+        .context("failed to open SQLite reader for join requests")?;
+
+    let query = match status_filter {
+        Some(status) => format!(
+            "SELECT r.id, r.requester_user_id, r.requested_role, r.status, r.message, r.created_at,
+                    p.full_name AS requester_name, p.email AS requester_email
+             FROM org_join_requests r
+             LEFT JOIN user_profiles p ON p.id = r.requester_user_id
+             WHERE r.status = '{}'
+             ORDER BY r.created_at DESC
+             LIMIT 50",
+            status
+        ),
+        None => "SELECT r.id, r.requester_user_id, r.requested_role, r.status, r.message, r.created_at,
+                        p.full_name AS requester_name, p.email AS requester_email
+                 FROM org_join_requests r
+                 LEFT JOIN user_profiles p ON p.id = r.requester_user_id
+                 ORDER BY r.created_at DESC
+                 LIMIT 50"
+            .to_string(),
+    };
+
+    let mut stmt = reader.prepare(&query)?;
+    let mut rows = stmt.query(params![])?;
+    let mut requests = Vec::new();
+
+    while let Some(row) = rows.next()? {
+        requests.push(LocalJoinRequest {
+            id: row.get("id")?,
+            requester_user_id: row.get("requester_user_id")?,
+            requested_role: row
+                .get::<_, Option<String>>("requested_role")?
+                .unwrap_or_else(|| "field_worker".to_string()),
+            status: row
+                .get::<_, Option<String>>("status")?
+                .unwrap_or_else(|| "pending".to_string()),
+            message: row.get("message")?,
+            created_at: row.get("created_at")?,
+            requester_name: row.get("requester_name")?,
+            requester_email: row.get("requester_email")?,
+        });
+    }
+
+    Ok(requests)
+}
+
+#[allow(dead_code)]
+pub async fn fetch_local_user_count(db: &PowerSyncDatabase) -> Result<i64> {
+    let reader = db
+        .reader()
+        .await
+        .context("failed to open SQLite reader for user count")?;
+    let count = reader
+        .query_row("SELECT COUNT(*) FROM user_profiles", params![], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap_or(0);
+    Ok(count)
+}
+
 pub fn local_write_guard_message(queue_depth: i64) -> String {
     format!(
         "detected {queue_depth} queued local write(s) in sqlite; rust-edge is strict read-only for the deadline build. reset the local edge database files or remove the local writes before starting the daemon"

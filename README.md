@@ -15,13 +15,28 @@ A read-only PowerSync daemon for monitoring critical field incidents on edge dev
 
 ## Features
 
+- **Local-First & Offline-First** — All data (incidents, join requests, user profiles) synced to local SQLite via PowerSync; queries read from local DB first, auto-syncs from cloud when local is empty
 - **Read-Only Sync** — Receives incident data from PowerSync; strictly prevents local writes
 - **Interactive TUI** — Live dashboard showing incidents, escalations, and sync status (auto-detects terminal)
 - **Headless Mode** — Falls back to structured logging when no terminal is available (servers, containers)
+- **Join Request Management** — View pending requests and interactively approve or reject them from the CLI via Supabase RPC
 - **Browser-Based Login** — Authenticate via browser without credentials touching the terminal
-- **Role-Based Streams** — Admins, supervisors, and field workers see different data
+- **Role-Based Streams** — Admins, supervisors, and field workers see different data scoped by 9 PowerSync Sync Streams
 - **WiFi Telemetry** — Monitors signal quality from `/proc/net/wireless`
 - **Diagnostics** — Built-in `doctor` command for connectivity and configuration troubleshooting
+- **curl Install** — One-line installer script with platform detection and cargo fallback
+
+## Install
+
+```bash
+curl -fsSL https://fieldmid.com/install.sh | sh
+```
+
+Or build from source:
+
+```bash
+cargo install --git https://github.com/fieldmid/rust-edge-repo.git
+```
 
 ## Commands
 
@@ -32,11 +47,11 @@ fieldmid login                   # Authenticate (browser or email/password)
 fieldmid logout                  # Clear session
 fieldmid whoami                  # Show current session info
 fieldmid users                   # List org users (admin/supervisor only)
-fieldmid requests                # View pending join requests
+fieldmid requests                # View and approve/reject join requests
 fieldmid doctor                  # Diagnose environment, DB, DNS, connectivity
 fieldmid check-connectivity      # Test PowerSync connection
-fieldmid latest-incidents        # Show latest 20 incidents from local DB
-fieldmid install-hint            # Print curl installer command
+fieldmid latest-incidents        # Show latest 20 incidents (syncs if local DB empty)
+fieldmid install-hint            # Print install options
 fieldmid help                    # Show help
 ```
 
@@ -107,11 +122,22 @@ Watcher threads (incidents, sync status, write guard)
 TUI Renderer (ratatui) or Headless Logger
 ```
 
-**Local Schema:**
+**Local Schema (7 tables synced via PowerSync):**
 - `incidents` — Safety incidents with severity and AI analysis
 - `sites` — Monitored field sites
 - `escalations` — Escalation tracking
-- `sync_logs` — Local sync metadata (not synced to backend)
+- `user_profiles` — User roles, org membership, and status
+- `org_join_requests` — Join requests with approval workflow
+- `notifications` — In-app alerts and push notification payloads
+- `sync_logs` — Local sync metadata (local-only, not synced to backend)
+
+## Local-First & Offline-First
+
+- **PowerSync-synced local SQLite** — Incidents, join requests, user profiles, and notifications are synced to a local SQLite database via PowerSync
+- **Offline reads** — All queries (`latest-incidents`, `requests`, TUI dashboard) read from local SQLite first. If the local DB is empty, the CLI auto-connects to PowerSync and syncs before showing data
+- **Offline request queue** — Join requests read from the local replica are always available, even without connectivity
+- **Online actions** — Approve/reject decisions are sent to Supabase via RPC when connectivity is available
+- **Opportunistic sync** — The daemon continuously syncs in the background when connected; cached data is shown instantly when offline
 
 ## Key Design Decisions
 
@@ -120,17 +146,6 @@ TUI Renderer (ratatui) or Headless Logger
 - **Device auto-ID** — Combines hostname + hardware model for unique identification
 - **Session persistence** — JSON file at `~/.fieldmid/session.json`
 - **Write queue guard** — Actively monitors and blocks any local modification attempts
-
-## Planned: curl Install
-
-```bash
-curl -fsSL https://downloads.fieldmid.dev/install.sh | sh
-```
-
-Override for staging:
-```bash
-FIELDMID_INSTALL_SCRIPT_URL=https://staging.fieldmid.dev/install.sh cargo run -- install-hint
-```
 
 ## Related Repos
 
