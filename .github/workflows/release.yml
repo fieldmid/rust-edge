@@ -5,7 +5,7 @@ name: Build and Release FieldMid CLI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ master ]
   release:
     types: [created]
 
