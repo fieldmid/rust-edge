@@ -45,13 +45,13 @@ detect_platform() {
 # ─── Detect latest version ───────────────────────────────────────────────
 
 detect_version() {
-    local version
+    local version=""
     if command -v curl >/dev/null 2>&1; then
         version=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
-            | grep '"tag_name"' | head -1 | sed 's/.*"tag_name":\s*"//;s/".*//')
+            | grep '"tag_name"' | head -1 | sed 's/.*"tag_name":\s*"//;s/".*//' || true)
     elif command -v wget >/dev/null 2>&1; then
         version=$(wget -qO- "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
-            | grep '"tag_name"' | head -1 | sed 's/.*"tag_name":\s*"//;s/".*//')
+            | grep '"tag_name"' | head -1 | sed 's/.*"tag_name":\s*"//;s/".*//' || true)
     fi
 
     if [ -z "${version:-}" ]; then
