@@ -1,5 +1,5 @@
-# This workflow builds the Rust project and publishes a release with binaries for Linux and macOS (x86_64 and aarch64)
-# on every push to main and on every new tag.
+# This workflow builds the Rust project and publishes Linux-only release binaries
+# (x86_64 and aarch64) on every push to master and on every new tag.
 
 name: Build and Release FieldMid CLI
 
@@ -27,22 +27,6 @@ jobs:
             target: aarch64
             rust_target: aarch64-unknown-linux-gnu
             artifact_name: fieldmid-linux-aarch64
-          - os: macos-13
-            target: x86_64
-            rust_target: x86_64-apple-darwin
-            artifact_name: fieldmid-macos-x86_64
-          - os: macos-14
-            target: aarch64
-            rust_target: aarch64-apple-darwin
-            artifact_name: fieldmid-macos-aarch64
-          - os: windows-latest
-            target: x86_64
-            rust_target: x86_64-pc-windows-msvc
-            artifact_name: fieldmid-windows-x86_64.exe
-          - os: windows-latest
-            target: aarch64
-            rust_target: aarch64-pc-windows-msvc
-            artifact_name: fieldmid-windows-aarch64.exe
     steps:
       - uses: actions/checkout@v5
       - name: Set up Rust toolchain
